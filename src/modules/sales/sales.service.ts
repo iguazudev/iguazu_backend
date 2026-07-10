@@ -73,6 +73,8 @@ export class SalesService {
         roomProduct: RoomProduct;
       };
       const productChecks: ProductCheck[] = [];
+      await this.assertRoomRentNotRegistered(tx, details);
+
       for (const detail of details.filter(
         (item) => item.itemType === SaleItemType.PRODUCT,
       )) {
@@ -491,11 +493,44 @@ export class SalesService {
     }
   }
 
+  private async assertRoomRentNotRegistered(
+    db: any,
+    details: Array<{ itemType: SaleItemType; stayId?: number }>,
+  ) {
+    const stayIds = details
+      .filter((detail) => detail.itemType === SaleItemType.ROOM_RENT)
+      .map((detail) => detail.stayId)
+      .filter((stayId): stayId is number => typeof stayId === 'number');
+    if (!stayIds.length) return;
+
+    if (new Set(stayIds).size !== stayIds.length) {
+      throw new BadRequestException(
+        'El alojamiento solo puede registrarse una vez por estadía.',
+      );
+    }
+
+    const existing = await db.saleDetail.findFirst({
+      where: {
+        itemType: SaleItemType.ROOM_RENT,
+        stayId: { in: stayIds },
+        sale: { status: { not: SaleStatus.CANCELLED } },
+      },
+      include: { sale: true },
+    });
+    if (existing) {
+      throw new BadRequestException(
+        `El alojamiento de la estadía #${existing.stayId} ya está registrado en la venta #${existing.saleId}.`,
+      );
+    }
+  }
+
   /**
    * Clasifica una venta para el CashMovement:
-   * - Solo productos → PRODUCT_SALE
-   * - Solo alojamiento → ROOM_RENT
-   * - Mixta → gana el tipo con mayor monto (prioridad ROOM_RENT en empate)
+   * - Solo productos -> PRODUCT_SALE
+   * - Solo alojamiento -> ROOM_RENT
+   * - Penalidades -> PRODUCT_LOSS_CHARGE
+   * - Otros cargos -> CASH_ADJUSTMENT
+   * - Mixta -> gana el tipo con mayor monto
    *
    * El reporte por tipo de ítem (salesByItemType) sigue siendo exacto porque
    * agrupa por SaleDetail; esta categoría solo ordena el arqueo de caja.
@@ -503,23 +538,27 @@ export class SalesService {
   private saleCategory(
     details: Array<{ itemType: SaleItemType; subtotal?: number | { toNumber: () => number } }>,
   ) {
-    let rentTotal = 0;
-    let productTotal = 0;
+    const totals = {
+      [CashMovementCategory.ROOM_RENT]: 0,
+      [CashMovementCategory.PRODUCT_SALE]: 0,
+      [CashMovementCategory.PRODUCT_LOSS_CHARGE]: 0,
+      [CashMovementCategory.CASH_ADJUSTMENT]: 0,
+    };
+
     for (const detail of details) {
       const amount = Number(detail.subtotal ?? 0);
       if (detail.itemType === SaleItemType.ROOM_RENT) {
-        rentTotal += amount;
+        totals[CashMovementCategory.ROOM_RENT] += amount;
       } else if (detail.itemType === SaleItemType.PRODUCT) {
-        productTotal += amount;
+        totals[CashMovementCategory.PRODUCT_SALE] += amount;
+      } else if (detail.itemType === SaleItemType.PENALTY) {
+        totals[CashMovementCategory.PRODUCT_LOSS_CHARGE] += amount;
+      } else {
+        totals[CashMovementCategory.CASH_ADJUSTMENT] += amount;
       }
     }
 
-    if (rentTotal === 0) return CashMovementCategory.PRODUCT_SALE;
-    if (productTotal === 0) return CashMovementCategory.ROOM_RENT;
-    // Mixta: gana el monto dominante (empate → ROOM_RENT, negocio principal).
-    return rentTotal >= productTotal
-      ? CashMovementCategory.ROOM_RENT
-      : CashMovementCategory.PRODUCT_SALE;
+    return Object.entries(totals).sort((a, b) => b[1] - a[1])[0][0] as CashMovementCategory;
   }
 
   private sum(values: number[]) {
