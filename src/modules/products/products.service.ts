@@ -15,7 +15,9 @@ export class ProductsService {
   async create(dto: CreateProductDto) {
     const name = this.cleanName(dto.name);
     await this.ensureNameAvailable(name);
-    return this.prisma.product.create({ data: { ...dto, name } });
+    return this.prisma.product.create({
+      data: this.withNormalizedStock({ ...dto, name }),
+    });
   }
 
   findAll() {
@@ -32,12 +34,15 @@ export class ProductsService {
   }
 
   async update(id: number, dto: UpdateProductDto) {
-    await this.findOne(id);
+    const product = await this.findOne(id);
     const name = dto.name === undefined ? undefined : this.cleanName(dto.name);
     if (name !== undefined) await this.ensureNameAvailable(name, id);
     return this.prisma.product.update({
       where: { id },
-      data: { ...dto, name },
+      data: this.withNormalizedStock(
+        { ...dto, name },
+        dto.purchaseFactor ?? product.purchaseFactor,
+      ),
     });
   }
 
@@ -64,5 +69,17 @@ export class ProductsService {
     });
     if (exists)
       throw new ConflictException('Ya existe un producto con ese nombre.');
+  }
+
+  private withNormalizedStock<T extends { stock?: number; purchaseFactor?: number }>(
+    data: T,
+    fallbackFactor = 1,
+  ) {
+    if (data.stock === undefined) return data;
+
+    return {
+      ...data,
+      stock: data.stock * (data.purchaseFactor ?? fallbackFactor),
+    };
   }
 }

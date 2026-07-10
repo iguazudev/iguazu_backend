@@ -119,28 +119,6 @@ async function main() {
   await seedRolePermissions(UserRole.CASHIER, CASHIER_PERMISSIONS);
   console.log('  ✓ Permisos por rol (RECEPTIONIST, CASHIER)');
 
-  // ----- 3. Productos básicos con unidad y factor de compra -----
-  const products = [
-    // unit = unidad de venta/stock, purchaseFactor = cuántas unidades entran al comprar 1 paquete/caja.
-    { name: 'Agua mineral 610ml', purchasePrice: 1.0, salePrice: 3.0, stock: 0, minStock: 6, unit: 'UNIDAD', purchaseFactor: 24 },
-    { name: 'Gaseosa 500ml', purchasePrice: 1.5, salePrice: 4.0, stock: 0, minStock: 6, unit: 'UNIDAD', purchaseFactor: 12 },
-    { name: 'Cerveza 330ml', purchasePrice: 3.0, salePrice: 6.0, stock: 0, minStock: 6, unit: 'UNIDAD', purchaseFactor: 6 },
-    { name: 'Snack (papas)', purchasePrice: 1.0, salePrice: 3.0, stock: 0, minStock: 6, unit: 'UNIDAD', purchaseFactor: 1 },
-    { name: 'Café', purchasePrice: 0.5, salePrice: 2.5, stock: 0, minStock: 3, unit: 'UNIDAD', purchaseFactor: 1 },
-    { name: 'Toalla extra', purchasePrice: 2.0, salePrice: 5.0, stock: 0, minStock: 3, unit: 'UNIDAD', purchaseFactor: 6 },
-  ];
-  for (const product of products) {
-    const existing = await prisma.product.findFirst({
-      where: { name: { equals: product.name, mode: 'insensitive' } },
-    });
-    if (existing) {
-      await prisma.product.update({ where: { id: existing.id }, data: product });
-    } else {
-      await prisma.product.create({ data: { ...product, active: true } });
-    }
-  }
-  console.log(`  ✓ ${products.length} productos básicos (con unidad y factor de compra)`);
-
   console.log('✓ Seed completado.');
 }
 
