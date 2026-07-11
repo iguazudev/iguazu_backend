@@ -51,6 +51,7 @@ const RECEPTIONIST_PERMISSIONS = [
   'GET /sales/account/by-stay/:stayId',
   'GET /sales/:id',
   'GET /cash-closures/preview',
+  'POST /cash-movements/expense',
   'GET /attendance/employee/:employeeId',
   'GET /attendance/range',
 ] as const;
@@ -65,6 +66,7 @@ const CASHIER_PERMISSIONS = [
   'GET /cash-movements',
   'GET /cash-movements/by-shift/:cashShiftId',
   'GET /cash-movements/:id',
+  'POST /cash-movements/expense',
   'POST /sales',
   'POST /sales/:id/pay',
   'GET /sales',

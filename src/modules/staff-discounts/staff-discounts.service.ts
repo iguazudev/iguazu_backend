@@ -6,7 +6,9 @@ import {
 import {
   CashMovementCategory,
   CashMovementType,
+  InventoryMovementType,
   PaymentMethod,
+  PenaltyStatus,
 } from '@prisma/client';
 import { CashMovementsService } from '../cash-movements/cash-movements.service';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -27,6 +29,32 @@ export class StaffDiscountsService {
       throw new NotFoundException('Empleado activo no encontrado.');
 
     return this.prisma.$transaction(async (tx) => {
+      let inventoryMovementId = dto.inventoryMovementId;
+      if (dto.productId && dto.quantity) {
+        const product = await tx.product.findFirst({
+          where: { id: dto.productId, active: true },
+        });
+        if (!product) throw new NotFoundException('Producto activo no encontrado.');
+        if (product.stock < dto.quantity) {
+          throw new BadRequestException('Stock insuficiente.');
+        }
+        await tx.product.update({
+          where: { id: product.id },
+          data: { stock: product.stock - dto.quantity },
+        });
+        const movement = await tx.inventoryMovement.create({
+          data: {
+            productId: product.id,
+            type: InventoryMovementType.OUT,
+            quantity: dto.quantity,
+            reason: dto.reason,
+            referenceType: 'STAFF_DISCOUNT',
+            userId,
+          },
+        });
+        inventoryMovementId = movement.id;
+      }
+
       let cashMovementId: number | undefined;
       if (dto.chargeNow) {
         if (!dto.paymentMethod)
@@ -51,7 +79,7 @@ export class StaffDiscountsService {
           employeeId: dto.employeeId,
           amount: dto.amount,
           reason: dto.reason,
-          inventoryMovementId: dto.inventoryMovementId,
+          inventoryMovementId,
           stayId: dto.stayId,
           cashMovementId,
         },
@@ -66,6 +94,16 @@ export class StaffDiscountsService {
         await tx.cashMovement.update({
           where: { id: cashMovementId },
           data: { referenceId: discount.id },
+        });
+      } else {
+        await tx.penalty.create({
+          data: {
+            employeeId: dto.employeeId,
+            amount: dto.amount,
+            reason: `Descuento: ${dto.reason}`,
+            date: new Date(),
+            status: PenaltyStatus.PENDING,
+          },
         });
       }
 

@@ -33,6 +33,17 @@ export class CreateStaffDiscountDto {
   @Type(() => Number)
   @IsInt()
   @IsOptional()
+  productId?: number;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  quantity?: number;
+
+  @Type(() => Number)
+  @IsInt()
+  @IsOptional()
   stayId?: number;
 
   @IsBoolean()

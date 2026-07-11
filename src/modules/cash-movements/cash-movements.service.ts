@@ -3,8 +3,15 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CashMovementType, CashShiftStatus } from '@prisma/client';
+import {
+  CashMovementCategory,
+  CashMovementType,
+  CashShiftStatus,
+  PenaltyStatus,
+  UserRole,
+} from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { CreateCashExpenseDto } from './dto/create-cash-expense.dto';
 import { RecordCashMovementDto } from './dto/record-cash-movement.dto';
 
 @Injectable()
@@ -77,6 +84,52 @@ export class CashMovementsService {
       where: { cashShiftId },
       orderBy: { occurredAt: 'desc' },
       include: { user: { include: { employee: true } } },
+    });
+  }
+
+  async expense(
+    dto: CreateCashExpenseDto,
+    user: { sub: number; role: UserRole; employeeId?: number | null },
+  ) {
+    const allowed: CashMovementCategory[] = [
+      CashMovementCategory.CASH_WITHDRAWAL,
+      CashMovementCategory.CASH_ADJUSTMENT,
+      CashMovementCategory.INVENTORY_PURCHASE,
+    ];
+    if (!allowed.includes(dto.category)) {
+      throw new BadRequestException('Categoría de egreso no permitida.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const movement = await this.record(
+        {
+          userId: user.sub,
+          type: CashMovementType.EXPENSE,
+          category: dto.category,
+          amount: dto.amount,
+          paymentMethod: dto.paymentMethod,
+          description: dto.description,
+          referenceType: 'MANUAL',
+        },
+        tx,
+      );
+
+      if (
+        user.employeeId &&
+        dto.category === CashMovementCategory.CASH_WITHDRAWAL
+      ) {
+        await tx.penalty.create({
+          data: {
+            employeeId: user.employeeId,
+            amount: dto.amount,
+            reason: `Salida de caja: ${dto.description ?? dto.category}`,
+            date: new Date(),
+            status: PenaltyStatus.PENDING,
+          },
+        });
+      }
+
+      return movement;
     });
   }
 

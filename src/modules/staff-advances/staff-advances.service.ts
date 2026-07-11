@@ -1,5 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { CashMovementCategory, CashMovementType } from '@prisma/client';
+import {
+  CashMovementCategory,
+  CashMovementType,
+  PenaltyStatus,
+} from '@prisma/client';
 import { CashMovementsService } from '../cash-movements/cash-movements.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateStaffAdvanceDto } from './dto/create-staff-advance.dto';
@@ -40,6 +44,15 @@ export class StaffAdvancesService {
           cashMovementId: movement.id,
         },
         include: { employee: true, cashMovement: true },
+      });
+      await tx.penalty.create({
+        data: {
+          employeeId: dto.employeeId,
+          amount: dto.amount,
+          reason: `Adelanto: ${dto.reason ?? 'sin detalle'}`,
+          date: new Date(),
+          status: PenaltyStatus.PENDING,
+        },
       });
       await tx.cashMovement.update({
         where: { id: movement.id },

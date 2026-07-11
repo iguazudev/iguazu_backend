@@ -74,6 +74,24 @@ export class CashClosuresService {
     );
 
     const closure = await this.prisma.$transaction(async (tx) => {
+      const updatedShift = await tx.cashShift.updateMany({
+        where: {
+          id: openShift.id,
+          openedById: userId,
+          status: CashShiftStatus.OPEN,
+        },
+        data: {
+          status: CashShiftStatus.CLOSED,
+          closedById: userId,
+          closedAt: new Date(),
+        },
+      });
+      if (updatedShift.count !== 1) {
+        throw new ForbiddenException(
+          'Solo el usuario que abrió la caja puede cerrarla.',
+        );
+      }
+
       const closure = await tx.cashClosure.create({
         data: {
           cashShiftId: openShift.id,
@@ -84,15 +102,6 @@ export class CashClosuresService {
           details: { create: details },
         },
         include: { details: true, cashShift: true },
-      });
-
-      await tx.cashShift.update({
-        where: { id: openShift.id },
-        data: {
-          status: CashShiftStatus.CLOSED,
-          closedById: userId,
-          closedAt: new Date(),
-        },
       });
 
       await tx.auditLog.create({

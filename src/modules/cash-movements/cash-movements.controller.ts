@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { CreateCashExpenseDto } from './dto/create-cash-expense.dto';
 import { ReverseCashMovementDto } from './dto/reverse-cash-movement.dto';
 import { CashMovementsService } from './cash-movements.service';
 
@@ -30,6 +31,11 @@ export class CashMovementsController {
   @Get(':id')
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.cashMovementsService.findOne(id);
+  }
+
+  @Post('expense')
+  expense(@Body() dto: CreateCashExpenseDto, @CurrentUser() user: any) {
+    return this.cashMovementsService.expense(dto, user);
   }
 
   @Post(':id/reverse')

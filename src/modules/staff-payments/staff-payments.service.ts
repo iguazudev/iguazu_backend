@@ -50,21 +50,35 @@ export class StaffPaymentsService {
       throw new BadRequestException('El monto bruto debe ser mayor a cero.');
     }
 
-    // Penalidades pendientes del empleado hasta el fin del período.
+    const selectedPenaltyIds = dto.penaltyIds
+      ? [...new Set(dto.penaltyIds)]
+      : undefined;
+
     const penalties = await this.prisma.penalty.findMany({
       where: {
         employeeId: dto.employeeId,
         status: PenaltyStatus.PENDING,
         date: { lte: periodEnd },
+        ...(selectedPenaltyIds ? { id: { in: selectedPenaltyIds } } : {}),
       },
       orderBy: { date: 'asc' },
     });
+    if (selectedPenaltyIds && penalties.length !== selectedPenaltyIds.length) {
+      throw new BadRequestException(
+        'Hay descuentos seleccionados que no están pendientes para este empleado.',
+      );
+    }
     const penaltyAmount = Number(
       penalties
         .reduce((sum, p) => sum + Number(p.amount), 0)
         .toFixed(2),
     );
     const netAmount = Number((grossAmount - penaltyAmount).toFixed(2));
+    if (netAmount <= 0) {
+      throw new BadRequestException(
+        'El neto a pagar debe ser mayor a cero. Desmarca algún descuento.',
+      );
+    }
 
     return this.prisma.$transaction(async (tx) => {
       // 1. Movimiento de caja por el neto (lo que efectivamente sale de caja).

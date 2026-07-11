@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { InventoryMovementType } from '@prisma/client';
+import { InventoryMovementType, PenaltyStatus, UserRole } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateInventoryMovementDto } from './dto/create-inventory-movement.dto';
 
@@ -11,21 +11,21 @@ import { CreateInventoryMovementDto } from './dto/create-inventory-movement.dto'
 export class InventoryService {
   constructor(private readonly prisma: PrismaService) {}
 
-  in(dto: CreateInventoryMovementDto, userId: number) {
-    return this.record(InventoryMovementType.IN, dto, userId);
+  in(dto: CreateInventoryMovementDto, user: AuthUser) {
+    return this.record(InventoryMovementType.IN, dto, user);
   }
 
-  out(dto: CreateInventoryMovementDto, userId: number) {
-    return this.record(InventoryMovementType.OUT, dto, userId);
+  out(dto: CreateInventoryMovementDto, user: AuthUser) {
+    return this.record(InventoryMovementType.OUT, dto, user);
   }
 
-  loss(dto: CreateInventoryMovementDto, userId: number) {
-    return this.record(InventoryMovementType.LOSS, dto, userId);
+  loss(dto: CreateInventoryMovementDto, user: AuthUser) {
+    return this.record(InventoryMovementType.LOSS, dto, user);
   }
 
-  adjust(dto: CreateInventoryMovementDto, userId: number) {
+  adjust(dto: CreateInventoryMovementDto, user: AuthUser) {
     // ADJUSTMENT usa quantity relativo: positivo suma stock, negativo resta.
-    return this.record(InventoryMovementType.ADJUSTMENT, dto, userId);
+    return this.record(InventoryMovementType.ADJUSTMENT, dto, user);
   }
 
   movements() {
@@ -46,7 +46,7 @@ export class InventoryService {
   record(
     type: InventoryMovementType,
     dto: CreateInventoryMovementDto,
-    userId: number,
+    user: AuthUser,
     db: any = this.prisma,
   ) {
     return db.$transaction(async (tx) => {
@@ -72,7 +72,7 @@ export class InventoryService {
         data: { stock: nextStock },
       });
 
-      return tx.inventoryMovement.create({
+      const movement = await tx.inventoryMovement.create({
         data: {
           productId: dto.productId,
           type,
@@ -80,10 +80,27 @@ export class InventoryService {
           reason: dto.reason,
           referenceType: dto.referenceType,
           referenceId: dto.referenceId,
-          userId,
+          userId: user.sub,
         },
         include: { product: true, user: true },
       });
+
+      const discountQuantity = Math.max(0, -stockDelta);
+      if (user.employeeId && discountQuantity > 0) {
+        await tx.penalty.create({
+          data: {
+            employeeId: user.employeeId,
+            amount: Number(product.salePrice) * discountQuantity,
+            reason: `Stock: ${product.name} x${discountQuantity}${
+              dto.reason ? ` - ${dto.reason}` : ''
+            }`,
+            date: new Date(),
+            status: PenaltyStatus.PENDING,
+          },
+        });
+      }
+
+      return movement;
     });
   }
 
@@ -101,3 +118,5 @@ export class InventoryService {
     return -quantity;
   }
 }
+
+type AuthUser = { sub: number; role: UserRole; employeeId?: number | null };

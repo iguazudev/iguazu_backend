@@ -19,22 +19,22 @@ export class InventoryController {
 
   @Post('in')
   in(@Body() dto: CreateInventoryMovementDto, @CurrentUser() user: any) {
-    return this.inventoryService.in(dto, user.sub);
+    return this.inventoryService.in(dto, user);
   }
 
   @Post('out')
   out(@Body() dto: CreateInventoryMovementDto, @CurrentUser() user: any) {
-    return this.inventoryService.out(dto, user.sub);
+    return this.inventoryService.out(dto, user);
   }
 
   @Post('loss')
   loss(@Body() dto: CreateInventoryMovementDto, @CurrentUser() user: any) {
-    return this.inventoryService.loss(dto, user.sub);
+    return this.inventoryService.loss(dto, user);
   }
 
   @Post('adjust')
   adjust(@Body() dto: CreateInventoryMovementDto, @CurrentUser() user: any) {
-    return this.inventoryService.adjust(dto, user.sub);
+    return this.inventoryService.adjust(dto, user);
   }
 
   @Get('movements')
