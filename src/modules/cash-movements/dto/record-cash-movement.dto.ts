@@ -2,6 +2,7 @@ import {
   CashMovementCategory,
   CashMovementType,
   PaymentMethod,
+  UserRole,
 } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
@@ -49,4 +50,6 @@ export class RecordCashMovementDto {
   @IsInt()
   @IsOptional()
   referenceId?: number;
+
+  actorRole?: UserRole;
 }

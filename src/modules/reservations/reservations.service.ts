@@ -8,6 +8,7 @@ import {
   CashMovementType,
   PaymentMethod,
   ReservationStatus,
+  UserRole,
 } from '@prisma/client';
 import { CashMovementsService } from '../cash-movements/cash-movements.service';
 import { StaysService } from '../stays/stays.service';
@@ -30,7 +31,7 @@ export class ReservationsService {
     private readonly stays: StaysService,
   ) {}
 
-  async create(dto: CreateReservationDto, userId: number) {
+  async create(dto: CreateReservationDto, user: AuthUser) {
     const startDate = new Date(dto.startDate);
     const endDate = new Date(dto.endDate);
     if (startDate >= endDate) {
@@ -49,7 +50,7 @@ export class ReservationsService {
           endDate,
           depositAmount: dto.depositAmount,
           notes: dto.notes,
-          createdById: userId,
+          createdById: user.sub,
         },
         include: reservationInclude,
       });
@@ -57,7 +58,9 @@ export class ReservationsService {
       if (dto.depositAmount && dto.depositAmount > 0) {
         await this.cashMovements.record(
           {
-            userId,
+            cashShiftId: dto.cashShiftId,
+            userId: user.sub,
+            actorRole: user.role,
             type: CashMovementType.INCOME,
             category: CashMovementCategory.RESERVATION_DEPOSIT,
             amount: dto.depositAmount,
@@ -98,7 +101,7 @@ export class ReservationsService {
     });
   }
 
-  async checkIn(id: number, dto: ReservationCheckInDto, userId: number) {
+  async checkIn(id: number, dto: ReservationCheckInDto, user: AuthUser) {
     const reservation = await this.findOne(id);
     if (
       reservation.status !== ReservationStatus.PENDING &&
@@ -116,7 +119,7 @@ export class ReservationsService {
         customerId: reservation.customerId,
         reservationId: reservation.id,
       },
-      userId,
+      user,
     );
   }
 
@@ -148,3 +151,5 @@ export class ReservationsService {
       );
   }
 }
+
+type AuthUser = { sub: number; role: UserRole };

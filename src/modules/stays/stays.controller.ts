@@ -21,7 +21,7 @@ export class StaysController {
 
   @Post('check-in')
   checkIn(@Body() dto: CheckInDto, @CurrentUser() user: any) {
-    return this.staysService.checkIn(dto, user.sub);
+    return this.staysService.checkIn(dto, user);
   }
 
   @Patch(':id/check-out')
@@ -30,7 +30,7 @@ export class StaysController {
     @Body() dto: CheckOutDto,
     @CurrentUser() user: any,
   ) {
-    return this.staysService.checkOut(id, dto, user.sub);
+    return this.staysService.checkOut(id, dto, user);
   }
 
   @Get('active')

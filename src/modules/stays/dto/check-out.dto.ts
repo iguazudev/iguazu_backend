@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   IsArray,
   IsEnum,
+  IsInt,
   IsNumber,
   IsOptional,
   Min,
@@ -29,6 +30,11 @@ export class CheckOutPaymentDto {
 }
 
 export class CheckOutDto {
+  @Type(() => Number)
+  @IsInt()
+  @IsOptional()
+  cashShiftId?: number;
+
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)

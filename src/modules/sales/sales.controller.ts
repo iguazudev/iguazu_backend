@@ -20,7 +20,7 @@ export class SalesController {
 
   @Post()
   create(@Body() dto: CreateSaleDto, @CurrentUser() user: any) {
-    return this.salesService.create(dto, user.sub);
+    return this.salesService.create(dto, user);
   }
 
   @Post(':id/pay')
@@ -29,7 +29,7 @@ export class SalesController {
     @Body() dto: PaySaleDto,
     @CurrentUser() user: any,
   ) {
-    return this.salesService.pay(id, dto, user.sub);
+    return this.salesService.pay(id, dto, user);
   }
 
   @Post(':id/cancel')
@@ -38,7 +38,7 @@ export class SalesController {
     @Body() dto: CancelSaleDto,
     @CurrentUser() user: any,
   ) {
-    return this.salesService.cancel(id, dto, user.sub);
+    return this.salesService.cancel(id, dto, user);
   }
 
   @Get()

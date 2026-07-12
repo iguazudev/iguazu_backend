@@ -11,7 +11,7 @@ export class StaffPaymentsController {
 
   @Post()
   create(@Body() dto: CreateStaffPaymentDto, @CurrentUser() user: any) {
-    return this.staffPaymentsService.create(dto, user.sub);
+    return this.staffPaymentsService.create(dto, user);
   }
 
   @Get()

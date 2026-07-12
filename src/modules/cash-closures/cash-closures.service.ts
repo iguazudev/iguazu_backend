@@ -175,8 +175,11 @@ export class CashClosuresService {
       },
       include: { product: true },
     });
-    const paidSales = sales.filter((sale: any) => sale.status === SaleStatus.PAID);
-    const pendingSales = sales.filter(
+    const activeSales = sales.filter(
+      (sale: any) => sale.status !== SaleStatus.CANCELLED,
+    );
+    const paidSales = activeSales.filter((sale: any) => sale.status === SaleStatus.PAID);
+    const pendingSales = activeSales.filter(
       (sale: any) => sale.status === SaleStatus.OPEN,
     );
 
@@ -189,10 +192,10 @@ export class CashClosuresService {
       openingAmount: Number(shift.openingAmount),
       expectedByMethod,
       totalExpected: this.sum(Object.values(expectedByMethod).map(Number)),
-      salesCount: sales.length,
+      salesCount: activeSales.length,
       paidSalesCount: paidSales.length,
       pendingSalesCount: pendingSales.length,
-      salesTotal: this.sum(sales.map((sale: any) => Number(sale.total))),
+      salesTotal: this.sum(activeSales.map((sale: any) => Number(sale.total))),
       paidSalesTotal: this.sum(paidSales.map((sale: any) => Number(sale.total))),
       pendingSalesTotal: this.sum(
         pendingSales.map((sale: any) => Number(sale.total)),

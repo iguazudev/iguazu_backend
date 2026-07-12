@@ -38,6 +38,11 @@ export class CreateReservationDto {
   @ValidateIf((o) => o.depositAmount && o.depositAmount > 0)
   paymentMethod?: PaymentMethod;
 
+  @Type(() => Number)
+  @IsInt()
+  @IsOptional()
+  cashShiftId?: number;
+
   @IsString()
   @IsOptional()
   notes?: string;

@@ -7,6 +7,7 @@ import {
   CashMovementCategory,
   CashMovementType,
   PenaltyStatus,
+  UserRole,
 } from '@prisma/client';
 import { CashMovementsService } from '../cash-movements/cash-movements.service';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -19,7 +20,10 @@ export class StaffPaymentsService {
     private readonly cashMovements: CashMovementsService,
   ) {}
 
-  async create(dto: CreateStaffPaymentDto, userId: number) {
+  async create(
+    dto: CreateStaffPaymentDto,
+    user: { sub: number; role: UserRole },
+  ) {
     const employee = await this.prisma.employee.findFirst({
       where: { id: dto.employeeId, active: true },
     });
@@ -31,6 +35,18 @@ export class StaffPaymentsService {
     const periodEnd = new Date(dto.periodEnd);
     if (periodStart > periodEnd) {
       throw new BadRequestException('Rango inválido.');
+    }
+    const existingPayment = await this.prisma.staffPayment.findFirst({
+      where: {
+        employeeId: dto.employeeId,
+        periodStart: { lte: periodEnd },
+        periodEnd: { gte: periodStart },
+      },
+    });
+    if (existingPayment) {
+      throw new BadRequestException(
+        'El empleado ya tiene un pago registrado en ese período.',
+      );
     }
 
     // Asistencia: conteo referencial para sugerir el bruto. No crea FK.
@@ -84,7 +100,9 @@ export class StaffPaymentsService {
       // 1. Movimiento de caja por el neto (lo que efectivamente sale de caja).
       const movement = await this.cashMovements.record(
         {
-          userId,
+          cashShiftId: dto.cashShiftId,
+          userId: user.sub,
+          actorRole: user.role,
           type: CashMovementType.EXPENSE,
           category: CashMovementCategory.STAFF_PAYMENT,
           amount: netAmount,
@@ -105,7 +123,7 @@ export class StaffPaymentsService {
           periodStart,
           periodEnd,
           cashMovementId: movement.id,
-          paidById: userId,
+          paidById: user.sub,
         },
         include: { employee: true, cashMovement: true },
       });

@@ -60,6 +60,11 @@ export class CreateSaleDto {
   @Type(() => Number)
   @IsInt()
   @IsOptional()
+  cashShiftId?: number;
+
+  @Type(() => Number)
+  @IsInt()
+  @IsOptional()
   customerId?: number;
 
   @Type(() => Number)
@@ -89,6 +94,11 @@ export class CreateSaleDto {
 }
 
 export class PaySaleDto {
+  @Type(() => Number)
+  @IsInt()
+  @IsOptional()
+  cashShiftId?: number;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => CreateSalePaymentDto)

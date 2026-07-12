@@ -1,6 +1,14 @@
 import { CashMovementCategory, PaymentMethod } from '@prisma/client';
 import { Type } from 'class-transformer';
-import { IsEnum, IsNotEmpty, IsNumber, IsString, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsInt,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
 
 export class CreateCashExpenseDto {
   @IsEnum(CashMovementCategory)
@@ -17,4 +25,9 @@ export class CreateCashExpenseDto {
   @IsString()
   @IsNotEmpty()
   description!: string;
+
+  @Type(() => Number)
+  @IsInt()
+  @IsOptional()
+  cashShiftId?: number;
 }

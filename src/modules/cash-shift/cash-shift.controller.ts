@@ -27,6 +27,11 @@ export class CashShiftController {
     return this.cashShiftService.getOpenShift(user.sub);
   }
 
+  @Get('open/all')
+  getOpenShifts(@CurrentUser() user: any) {
+    return this.cashShiftService.getOpenShifts(user);
+  }
+
   @Post('close')
   close(@CurrentUser() user: any) {
     return this.cashShiftService.close(user.sub);

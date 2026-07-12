@@ -64,6 +64,11 @@ export class InventoryService {
         dto.quantity,
         type === InventoryMovementType.IN ? product.purchaseFactor : 1,
       );
+      if (stockDelta < 0 && !dto.reason?.trim()) {
+        throw new BadRequestException(
+          'El motivo es obligatorio al sacar o descontar stock.',
+        );
+      }
       const nextStock = product.stock + stockDelta;
       if (nextStock < 0) throw new BadRequestException('Stock insuficiente.');
 

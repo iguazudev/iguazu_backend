@@ -7,10 +7,12 @@ import {
   CashMovementCategory,
   CashMovementType,
   CashShiftStatus,
+  InvoiceStatus,
   InventoryMovementType,
   SaleItemType,
   SaleStatus,
   StayStatus,
+  UserRole,
 } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CancelSaleDto } from './dto/cancel-sale.dto';
@@ -28,7 +30,7 @@ const saleInclude = {
 export class SalesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateSaleDto, userId: number) {
+  async create(dto: CreateSaleDto, user: AuthUser) {
     if (!dto.details?.length)
       throw new BadRequestException('La venta requiere detalles.');
     const payments = dto.payments ?? [];
@@ -39,10 +41,7 @@ export class SalesService {
       );
     }
 
-    const openShift = await this.prisma.cashShift.findFirst({
-      where: { status: CashShiftStatus.OPEN, openedById: userId },
-    });
-    if (!openShift) throw new NotFoundException('No tienes caja abierta.');
+    const openShift = await this.openShiftFor(user, dto.cashShiftId);
     const stay = dto.stayId
       ? await this.prisma.stay.findFirst({
           where: { id: dto.stayId, status: StayStatus.ACTIVE },
@@ -144,7 +143,7 @@ export class SalesService {
           customerId: dto.customerId,
           stayId: dto.stayId,
           cashShiftId: openShift.id,
-          userId,
+          userId: user.sub,
           total,
           status: isCharge ? SaleStatus.OPEN : SaleStatus.PAID,
           invoiceType: dto.invoiceType ?? 'TICKET',
@@ -174,7 +173,7 @@ export class SalesService {
             reason: `Venta #${sale.id}`,
             referenceType: 'SALE',
             referenceId: sale.id,
-            userId,
+            userId: user.sub,
           },
         });
       }
@@ -183,7 +182,7 @@ export class SalesService {
         const movement = await tx.cashMovement.create({
           data: {
             cashShiftId: openShift.id,
-            userId,
+            userId: user.sub,
             type: CashMovementType.INCOME,
             category: this.saleCategory(details),
             amount: payment.amount,
@@ -210,7 +209,7 @@ export class SalesService {
     });
   }
 
-  async pay(id: number, dto: PaySaleDto, userId: number) {
+  async pay(id: number, dto: PaySaleDto, user: AuthUser) {
     const sale = await this.prisma.sale.findUnique({
       where: { id },
       include: saleInclude,
@@ -224,17 +223,14 @@ export class SalesService {
       throw new BadRequestException('El total y los pagos no coinciden.');
     }
 
-    const openShift = await this.prisma.cashShift.findFirst({
-      where: { status: CashShiftStatus.OPEN, openedById: userId },
-    });
-    if (!openShift) throw new NotFoundException('No tienes caja abierta.');
+    const openShift = await this.openShiftFor(user, dto.cashShiftId);
 
     return this.prisma.$transaction(async (tx) => {
       for (const payment of dto.payments) {
         const movement = await tx.cashMovement.create({
           data: {
             cashShiftId: openShift.id,
-            userId,
+            userId: user.sub,
             type: CashMovementType.INCOME,
             category: this.saleCategory(sale.details),
             amount: payment.amount,
@@ -262,7 +258,7 @@ export class SalesService {
     });
   }
 
-  async cancel(id: number, dto: CancelSaleDto, userId: number) {
+  async cancel(id: number, dto: CancelSaleDto, user: AuthUser) {
     const sale = await this.prisma.sale.findUnique({
       where: { id },
       include: { ...saleInclude, payments: { include: { cashMovement: true } } },
@@ -270,6 +266,15 @@ export class SalesService {
     if (!sale) throw new NotFoundException('Venta no encontrada.');
     if (sale.status === SaleStatus.CANCELLED) {
       throw new BadRequestException('La venta ya fue anulada.');
+    }
+    if (
+      sale.invoice &&
+      sale.invoice.status !== InvoiceStatus.CANCELED &&
+      sale.invoice.status !== InvoiceStatus.REJECTED
+    ) {
+      throw new BadRequestException(
+        'La venta tiene comprobante emitido. Primero emite la nota de crédito.',
+      );
     }
 
     // Si la venta estaba abierta (cargo pendiente sin cobro), solo marcar cancelada.
@@ -292,7 +297,7 @@ export class SalesService {
                 reason: `Anulación de cargo #${id}`,
                 referenceType: 'SALE_VOID',
                 referenceId: id,
-                userId,
+                userId: user.sub,
               },
             });
           }
@@ -304,12 +309,14 @@ export class SalesService {
             status: SaleStatus.CANCELLED,
             cancelReason: dto.voidReason ?? dto.reason,
             cancelledAt: new Date(),
-            cancelledById: userId,
+            cancelledById: user.sub,
           },
           include: saleInclude,
         });
       });
     }
+
+    const openShift = await this.openShiftFor(user, dto.cashShiftId);
 
     // Venta PAGADA: revertir stock + crear movimientos de caja compensatorios.
     return this.prisma.$transaction(async (tx) => {
@@ -330,7 +337,7 @@ export class SalesService {
               reason: `Anulación de venta #${id}`,
               referenceType: 'SALE_VOID',
               referenceId: id,
-              userId,
+              userId: user.sub,
             },
           });
         }
@@ -340,8 +347,8 @@ export class SalesService {
       for (const payment of sale.payments) {
         await tx.cashMovement.create({
           data: {
-            cashShiftId: sale.cashShiftId,
-            userId,
+            cashShiftId: openShift.id,
+            userId: user.sub,
             type: CashMovementType.EXPENSE,
             category: payment.cashMovement?.category ?? CashMovementCategory.PRODUCT_SALE,
             amount: payment.amount,
@@ -360,7 +367,7 @@ export class SalesService {
           status: SaleStatus.CANCELLED,
           cancelReason: dto.voidReason ?? dto.reason,
           cancelledAt: new Date(),
-          cancelledById: userId,
+          cancelledById: user.sub,
         },
         include: saleInclude,
       });
@@ -477,9 +484,33 @@ export class SalesService {
     };
   }
 
+  private async openShiftFor(user: AuthUser, cashShiftId?: number) {
+    if (user.role === UserRole.ADMIN && !cashShiftId) {
+      throw new BadRequestException('Selecciona una caja abierta.');
+    }
+    const openShift =
+      user.role === UserRole.ADMIN && cashShiftId
+        ? await this.prisma.cashShift.findFirst({
+            where: { id: cashShiftId, status: CashShiftStatus.OPEN },
+          })
+        : await this.prisma.cashShift.findFirst({
+            where: { status: CashShiftStatus.OPEN, openedById: user.sub },
+          });
+    if (!openShift) throw new NotFoundException('No tienes caja abierta.');
+    return openShift;
+  }
+
   private validateDetail(detail: any) {
     if (detail.itemType === SaleItemType.PRODUCT && !detail.productId) {
       throw new BadRequestException('productId es requerido para PRODUCT.');
+    }
+    if (
+      detail.itemType === SaleItemType.PRODUCT &&
+      !Number.isInteger(Number(detail.quantity))
+    ) {
+      throw new BadRequestException(
+        'La cantidad de producto debe ser entera.',
+      );
     }
     if (detail.itemType === SaleItemType.ROOM_RENT && !detail.stayId) {
       throw new BadRequestException('stayId es requerido para ROOM_RENT.');
@@ -567,3 +598,5 @@ export class SalesService {
     );
   }
 }
+
+type AuthUser = { sub: number; role: UserRole };

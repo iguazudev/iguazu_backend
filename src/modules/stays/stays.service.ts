@@ -13,6 +13,7 @@ import {
   SaleItemType,
   SaleStatus,
   StayStatus,
+  UserRole,
 } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CheckInDto } from './dto/check-in.dto';
@@ -37,11 +38,8 @@ const stayInclude = {
 export class StaysService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async checkIn(dto: CheckInDto, userId: number) {
-    const openShift = await this.prisma.cashShift.findFirst({
-      where: { status: CashShiftStatus.OPEN, openedById: userId },
-    });
-    if (!openShift) throw new NotFoundException('No tienes caja abierta.');
+  async checkIn(dto: CheckInDto, user: AuthUser) {
+    const openShift = await this.openShiftFor(user, dto.cashShiftId);
 
     const room = await this.prisma.room.findFirst({
       where: { id: dto.roomId, active: true },
@@ -127,7 +125,7 @@ export class StaysService {
           priceTypeId: dto.priceTypeId,
           agreedPrice,
           status: StayStatus.ACTIVE,
-          createdById: userId,
+          createdById: user.sub,
           cashShiftId: openShift.id,
         },
         include: stayInclude,
@@ -149,7 +147,7 @@ export class StaysService {
     });
   }
 
-  async checkOut(id: number, dto: CheckOutDto, userId: number) {
+  async checkOut(id: number, dto: CheckOutDto, user: AuthUser) {
     const stay = await this.prisma.stay.findUnique({ where: { id } });
     if (!stay) throw new NotFoundException('Estadía no encontrada.');
     if (stay.status !== StayStatus.ACTIVE) {
@@ -175,7 +173,8 @@ export class StaysService {
       },
     });
     const alreadyCharged = Number(chargedRows._sum.subtotal ?? 0);
-    const balance = Number((dto.amount - alreadyCharged).toFixed(2));
+    const lodgingAmount = Number(stay.agreedPrice);
+    const balance = Number((lodgingAmount - alreadyCharged).toFixed(2));
 
     const payments = dto.payments ?? [];
     if (balance > 0) {
@@ -191,11 +190,7 @@ export class StaysService {
         );
       }
 
-      const openShift = await this.prisma.cashShift.findFirst({
-        where: { status: CashShiftStatus.OPEN, openedById: userId },
-      });
-      if (!openShift)
-        throw new NotFoundException('No tienes caja abierta.');
+      const openShift = await this.openShiftFor(user, dto.cashShiftId);
       stay.cashShiftId = openShift.id; // asegura consistencia de la tx abajo
     }
 
@@ -207,7 +202,7 @@ export class StaysService {
             customerId: stay.customerId,
             stayId: id,
             cashShiftId: stay.cashShiftId,
-            userId,
+            userId: user.sub,
             total: balance,
             status: SaleStatus.PAID,
             invoiceType: 'TICKET',
@@ -228,7 +223,7 @@ export class StaysService {
           const movement = await tx.cashMovement.create({
             data: {
               cashShiftId: stay.cashShiftId,
-              userId,
+              userId: user.sub,
               type: CashMovementType.INCOME,
               category: CashMovementCategory.ROOM_RENT,
               amount: payment.amount,
@@ -289,9 +284,27 @@ export class StaysService {
     return stay;
   }
 
+  private async openShiftFor(user: AuthUser, cashShiftId?: number) {
+    if (user.role === UserRole.ADMIN && !cashShiftId) {
+      throw new BadRequestException('Selecciona una caja abierta.');
+    }
+    const openShift =
+      user.role === UserRole.ADMIN && cashShiftId
+        ? await this.prisma.cashShift.findFirst({
+            where: { id: cashShiftId, status: CashShiftStatus.OPEN },
+          })
+        : await this.prisma.cashShift.findFirst({
+            where: { status: CashShiftStatus.OPEN, openedById: user.sub },
+          });
+    if (!openShift) throw new NotFoundException('No tienes caja abierta.');
+    return openShift;
+  }
+
   private sum(values: number[]) {
     return Number(
       values.reduce((total, value) => total + Number(value), 0).toFixed(2),
     );
   }
 }
+
+type AuthUser = { sub: number; role: UserRole };

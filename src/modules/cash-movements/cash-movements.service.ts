@@ -22,6 +22,9 @@ export class CashMovementsService {
     if (Number(data.amount) <= 0) {
       throw new BadRequestException('El monto debe ser mayor a cero.');
     }
+    if (data.actorRole === UserRole.ADMIN && !data.cashShiftId) {
+      throw new BadRequestException('Selecciona una caja abierta.');
+    }
 
     const cashShift = data.cashShiftId
       ? await db.cashShift.findUnique({ where: { id: data.cashShiftId } })
@@ -32,14 +35,15 @@ export class CashMovementsService {
     if (
       !cashShift ||
       cashShift.status !== CashShiftStatus.OPEN ||
-      cashShift.openedById !== data.userId
+      (cashShift.openedById !== data.userId && data.actorRole !== UserRole.ADMIN)
     ) {
       throw new NotFoundException('No tienes caja abierta.');
     }
 
+    const { actorRole: _actorRole, ...movementData } = data;
     const movement = await db.cashMovement.create({
       data: {
-        ...data,
+        ...movementData,
         cashShiftId: cashShift.id,
       },
     });
@@ -59,29 +63,39 @@ export class CashMovementsService {
     return movement;
   }
 
-  findAll() {
+  findAll(user: { sub: number; role: UserRole }) {
     return this.prisma.cashMovement.findMany({
+      where:
+        user.role === UserRole.ADMIN
+          ? undefined
+          : { cashShift: { openedById: user.sub } },
       orderBy: { occurredAt: 'desc' },
       include: { cashShift: true, user: { include: { employee: true } } },
     });
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, user: { sub: number; role: UserRole }) {
     const movement = await this.prisma.cashMovement.findUnique({
       where: { id },
       include: { cashShift: true, user: { include: { employee: true } } },
     });
 
-    if (!movement) {
+    if (
+      !movement ||
+      (user.role !== UserRole.ADMIN && movement.cashShift.openedById !== user.sub)
+    ) {
       throw new NotFoundException('Movimiento de caja no encontrado.');
     }
 
     return movement;
   }
 
-  byShift(cashShiftId: number) {
+  byShift(cashShiftId: number, user: { sub: number; role: UserRole }) {
     return this.prisma.cashMovement.findMany({
-      where: { cashShiftId },
+      where:
+        user.role === UserRole.ADMIN
+          ? { cashShiftId }
+          : { cashShiftId, cashShift: { openedById: user.sub } },
       orderBy: { occurredAt: 'desc' },
       include: { user: { include: { employee: true } } },
     });
@@ -103,7 +117,9 @@ export class CashMovementsService {
     return this.prisma.$transaction(async (tx) => {
       const movement = await this.record(
         {
+          cashShiftId: dto.cashShiftId,
           userId: user.sub,
+          actorRole: user.role,
           type: CashMovementType.EXPENSE,
           category: dto.category,
           amount: dto.amount,

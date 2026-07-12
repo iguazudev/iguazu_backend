@@ -11,6 +11,11 @@ export class CheckInDto {
   @Type(() => Number)
   @IsInt()
   @IsOptional()
+  cashShiftId?: number;
+
+  @Type(() => Number)
+  @IsInt()
+  @IsOptional()
   customerId?: number;
 
   @Type(() => Number)

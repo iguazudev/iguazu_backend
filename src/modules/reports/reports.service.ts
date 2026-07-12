@@ -39,6 +39,12 @@ export class ReportsService {
 
     const movements = shifts.flatMap((shift) => shift.cashMovements);
     const sales = shifts.flatMap((shift) => shift.sales);
+    const activeSales = sales.filter(
+      (sale) => sale.status !== SaleStatus.CANCELLED,
+    );
+    const cancelledSales = sales.filter(
+      (sale) => sale.status === SaleStatus.CANCELLED,
+    );
     const closures = shifts.flatMap((shift) =>
       shift.closure ? [{ ...shift.closure, shift }] : [],
     );
@@ -46,9 +52,13 @@ export class ReportsService {
     return {
       range: { from: start, to: end },
       shifts: shifts.length,
-      salesCount: sales.length,
-      paidSalesCount: sales.filter((sale) => sale.status === SaleStatus.PAID).length,
-      pendingSalesCount: sales.filter((sale) => sale.status === SaleStatus.OPEN).length,
+      salesCount: activeSales.length,
+      paidSalesCount: activeSales.filter((sale) => sale.status === SaleStatus.PAID).length,
+      pendingSalesCount: activeSales.filter((sale) => sale.status === SaleStatus.OPEN).length,
+      cancelledSalesCount: cancelledSales.length,
+      cancelledSalesTotal: this.sum(
+        cancelledSales.map((sale) => Number(sale.total)),
+      ),
       openingAmount: this.sum(shifts.map((shift) => Number(shift.openingAmount))),
       incomeTotal: this.sum(
         movements
@@ -165,13 +175,26 @@ export class ReportsService {
           acc[key] ??= {
             productId: detail.productId,
             product: detail.product?.name ?? 'Producto',
+            unit: detail.product?.unit ?? '-',
             quantity: 0,
             total: 0,
+            costTotal: 0,
+            profitTotal: 0,
+            purchasePrice: Number(detail.product?.purchasePrice ?? 0),
+            salePrice: Number(detail.product?.salePrice ?? 0),
             stock: detail.product?.stock ?? 0,
+            minStock: detail.product?.minStock ?? 0,
           };
-          acc[key].quantity += Number(detail.quantity);
-          acc[key].total += Number(detail.subtotal);
+          const quantity = Number(detail.quantity);
+          const subtotal = Number(detail.subtotal);
+          const cost = Number(detail.product?.purchasePrice ?? 0) * quantity;
+          acc[key].quantity += quantity;
+          acc[key].total += subtotal;
+          acc[key].costTotal += cost;
+          acc[key].profitTotal += subtotal - cost;
           acc[key].total = Number(acc[key].total.toFixed(2));
+          acc[key].costTotal = Number(acc[key].costTotal.toFixed(2));
+          acc[key].profitTotal = Number(acc[key].profitTotal.toFixed(2));
           return acc;
         }, {}),
       ).sort((a: any, b: any) => b.total - a.total),
@@ -255,7 +278,7 @@ export class ReportsService {
         total: this.sum(sales.map((sale) => Number(sale.total))),
         paid: byStatus.PAID,
         pending: byStatus.OPEN,
-        cancelled: byStatus.CANCELLED,
+        cancelled: this.sum(cancelled.map((sale) => Number(sale.total))),
       },
       byItemType,
       byPaymentMethod: this.groupSum(payments, 'paymentMethod', 'amount'),
@@ -520,7 +543,9 @@ export class ReportsService {
       createdAt: { gte: start, lte: end },
       ...(query.cashShiftId ? { cashShiftId: query.cashShiftId } : {}),
       ...(query.userId ? { userId: query.userId } : {}),
-      ...(query.status ? { status: query.status } : {}),
+      ...(query.status
+        ? { status: query.status }
+        : { status: { not: SaleStatus.CANCELLED } }),
     };
   }
 

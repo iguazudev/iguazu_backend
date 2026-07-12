@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CashShiftStatus, Prisma } from '@prisma/client';
+import { CashShiftStatus, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { OpenCashShiftDto } from './dto/create-cash-shift.dto';
 
@@ -25,6 +25,19 @@ export class CashShiftService {
           },
         },
         cashMovements: true,
+      },
+    });
+  }
+
+  async getOpenShifts(user: { sub: number; role: UserRole }) {
+    return this.prisma.cashShift.findMany({
+      where: {
+        status: CashShiftStatus.OPEN,
+        ...(user.role === UserRole.ADMIN ? {} : { openedById: user.sub }),
+      },
+      orderBy: { openedAt: 'desc' },
+      include: {
+        openedBy: { include: { employee: true } },
       },
     });
   }

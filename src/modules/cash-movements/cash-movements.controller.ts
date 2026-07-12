@@ -19,18 +19,21 @@ export class CashMovementsController {
   constructor(private readonly cashMovementsService: CashMovementsService) {}
 
   @Get()
-  findAll() {
-    return this.cashMovementsService.findAll();
+  findAll(@CurrentUser() user: any) {
+    return this.cashMovementsService.findAll(user);
   }
 
   @Get('by-shift/:cashShiftId')
-  byShift(@Param('cashShiftId', ParseIntPipe) cashShiftId: number) {
-    return this.cashMovementsService.byShift(cashShiftId);
+  byShift(
+    @Param('cashShiftId', ParseIntPipe) cashShiftId: number,
+    @CurrentUser() user: any,
+  ) {
+    return this.cashMovementsService.byShift(cashShiftId, user);
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.cashMovementsService.findOne(id);
+  findOne(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: any) {
+    return this.cashMovementsService.findOne(id, user);
   }
 
   @Post('expense')

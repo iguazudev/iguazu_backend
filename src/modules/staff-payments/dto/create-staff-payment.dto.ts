@@ -32,6 +32,11 @@ export class CreateStaffPaymentDto {
   paymentMethod!: PaymentMethod;
 
   @Type(() => Number)
+  @IsInt()
+  @IsOptional()
+  cashShiftId?: number;
+
+  @Type(() => Number)
   @IsArray()
   @ArrayUnique()
   @IsInt({ each: true })

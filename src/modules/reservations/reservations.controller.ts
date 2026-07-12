@@ -22,7 +22,7 @@ export class ReservationsController {
 
   @Post()
   create(@Body() dto: CreateReservationDto, @CurrentUser() user: any) {
-    return this.reservationsService.create(dto, user.sub);
+    return this.reservationsService.create(dto, user);
   }
 
   @Get()
@@ -56,6 +56,6 @@ export class ReservationsController {
     @Body() dto: ReservationCheckInDto,
     @CurrentUser() user: any,
   ) {
-    return this.reservationsService.checkIn(id, dto, user.sub);
+    return this.reservationsService.checkIn(id, dto, user);
   }
 }
