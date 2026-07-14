@@ -84,6 +84,7 @@ export const AVAILABLE_PERMISSIONS = [
   'POST /sales',
   'POST /sales/:id/pay',
   'POST /sales/:id/cancel',
+  'PATCH /sales/:id',
   'GET /sales',
   'GET /sales/by-shift/:cashShiftId',
   'GET /sales/by-stay/:stayId',

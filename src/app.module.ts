@@ -31,7 +31,12 @@ import { BillingModule } from './modules/billing/billing.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: process.env.NODE_ENV
+        ? [`.env.${process.env.NODE_ENV}.local`, `.env.${process.env.NODE_ENV}`, '.env']
+        : ['.env'],
+    }),
     AuthModule,
     UsersModule,
     EmployeesModule,

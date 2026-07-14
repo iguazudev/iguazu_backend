@@ -15,8 +15,10 @@ import {
   UserRole,
 } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { CancelSaleDto } from './dto/cancel-sale.dto';
 import { CreateSaleDto, PaySaleDto } from './dto/create-sale.dto';
+import { UpdateSaleDto } from './dto/update-sale.dto';
 
 const saleInclude = {
   customer: true,
@@ -28,7 +30,10 @@ const saleInclude = {
 
 @Injectable()
 export class SalesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   async create(dto: CreateSaleDto, user: AuthUser) {
     if (!dto.details?.length)
@@ -374,41 +379,297 @@ export class SalesService {
     });
   }
 
-  findAll() {
-    return this.prisma.sale.findMany({
-      orderBy: { createdAt: 'desc' },
-      include: saleInclude,
-    });
-  }
+  async update(id: number, dto: UpdateSaleDto, user: AuthUser) {
+    const reason = dto.reason.trim();
+    if (!reason) throw new BadRequestException('El motivo es requerido.');
+    if (!dto.details?.length) {
+      throw new BadRequestException('La edición requiere detalles.');
+    }
 
-  async findOne(id: number) {
     const sale = await this.prisma.sale.findUnique({
       where: { id },
       include: saleInclude,
     });
     if (!sale) throw new NotFoundException('Venta no encontrada.');
+    if (sale.status === SaleStatus.CANCELLED) {
+      throw new BadRequestException('No se puede editar una venta anulada.');
+    }
+    if (user.role !== UserRole.ADMIN && sale.userId !== user.sub) {
+      throw new BadRequestException('Solo puedes editar tus ventas.');
+    }
+    if (
+      sale.invoice &&
+      (sale.invoice.status === InvoiceStatus.ACCEPTED ||
+        sale.invoice.status === InvoiceStatus.OBSERVED)
+    ) {
+      throw new BadRequestException(
+        'La venta tiene comprobante emitido. Corrige con nota de crédito/débito.',
+      );
+    }
+
+    const detailsById = new Map(sale.details.map((detail) => [detail.id, detail]));
+    const requestedIds = new Set(
+      dto.details
+        .map((detail) => detail.id)
+        .filter((detailId): detailId is number => detailId !== undefined),
+    );
+    if (requestedIds.size !== dto.details.filter((detail) => detail.id !== undefined).length) {
+      throw new BadRequestException('Hay detalles repetidos en la edición.');
+    }
+    for (const detail of dto.details) {
+      if (detail.id !== undefined && !detailsById.has(detail.id)) {
+        throw new BadRequestException('Uno o más detalles no pertenecen a la venta.');
+      }
+      if (detail.id === undefined && !detail.productId) {
+        throw new BadRequestException('productId es requerido para agregar producto.');
+      }
+      if (detail.quantity !== undefined && !Number.isInteger(Number(detail.quantity))) {
+        throw new BadRequestException('La cantidad de producto debe ser entera.');
+      }
+    }
+    for (const detail of sale.details) {
+      if (
+        !requestedIds.has(detail.id) &&
+        detail.itemType !== SaleItemType.PRODUCT
+      ) {
+        throw new BadRequestException('Solo se pueden quitar productos.');
+      }
+    }
+
+    const newProductIds = dto.details
+      .filter((detail) => detail.id === undefined)
+      .map((detail) => detail.productId!)
+      .filter((productId, index, list) => list.indexOf(productId) === index);
+    const products = newProductIds.length
+      ? await this.prisma.product.findMany({
+          where: { id: { in: newProductIds }, active: true },
+        })
+      : [];
+    if (products.length !== newProductIds.length) {
+      throw new NotFoundException('Uno o más productos activos no existen.');
+    }
+    const productsById = new Map(products.map((product) => [product.id, product]));
+
+    const nextDetails = dto.details.map((patch) => {
+      if (patch.id !== undefined) {
+        const detail = detailsById.get(patch.id)!;
+        const isProduct = detail.itemType === SaleItemType.PRODUCT;
+        const quantity = isProduct
+          ? Number(patch.quantity ?? detail.quantity)
+          : Number(detail.quantity);
+        const unitPrice = patch.unitPrice ?? Number(detail.unitPrice);
+        return {
+          id: detail.id,
+          itemType: detail.itemType,
+          productId: detail.productId,
+          stayId: detail.stayId,
+          description: detail.description,
+          quantity,
+          unitPrice,
+          subtotal: Number((quantity * unitPrice).toFixed(2)),
+        };
+      }
+
+      const product = productsById.get(patch.productId!)!;
+      const quantity = Number(patch.quantity ?? 1);
+      const unitPrice = patch.unitPrice ?? Number(product.salePrice);
+      return {
+        itemType: SaleItemType.PRODUCT,
+        productId: product.id,
+        stayId: null,
+        description: product.name,
+        quantity,
+        unitPrice,
+        subtotal: Number((quantity * unitPrice).toFixed(2)),
+      };
+    });
+    if (!nextDetails.length) {
+      throw new BadRequestException('La venta debe conservar al menos un detalle.');
+    }
+    const total = this.sum(nextDetails.map((detail) => detail.subtotal));
+    const oldTotal = Number(sale.total);
+    const stockDeltas = this.productStockDeltas(sale.details, nextDetails);
+
+    return this.prisma.$transaction(async (tx) => {
+      for (const [productId, delta] of stockDeltas) {
+        if (delta === 0) continue;
+        if (delta > 0) {
+          const product = await tx.product.findUnique({ where: { id: productId } });
+          if (!product || product.stock < delta) {
+            throw new BadRequestException('Stock insuficiente para editar la venta.');
+          }
+          await tx.product.update({
+            where: { id: productId },
+            data: { stock: { decrement: delta } },
+          });
+          await tx.inventoryMovement.create({
+            data: {
+              productId,
+              type: InventoryMovementType.OUT,
+              quantity: delta,
+              reason: `Edición de venta #${id}`,
+              referenceType: 'SALE_EDIT',
+              referenceId: id,
+              userId: user.sub,
+            },
+          });
+        } else {
+          await tx.product.update({
+            where: { id: productId },
+            data: { stock: { increment: Math.abs(delta) } },
+          });
+          await tx.inventoryMovement.create({
+            data: {
+              productId,
+              type: InventoryMovementType.IN,
+              quantity: Math.abs(delta),
+              reason: `Edición de venta #${id}`,
+              referenceType: 'SALE_EDIT',
+              referenceId: id,
+              userId: user.sub,
+            },
+          });
+        }
+      }
+
+      for (const detail of sale.details) {
+        if (!nextDetails.some((next) => next.id === detail.id)) {
+          await tx.saleDetail.delete({ where: { id: detail.id } });
+        }
+      }
+
+      for (const detail of nextDetails) {
+        if (detail.id === undefined) {
+          await tx.saleDetail.create({
+            data: {
+              saleId: id,
+              itemType: detail.itemType,
+              productId: detail.productId,
+              stayId: detail.stayId,
+              description: detail.description,
+              quantity: detail.quantity,
+              unitPrice: detail.unitPrice,
+              subtotal: detail.subtotal,
+            },
+          });
+          continue;
+        }
+
+        await tx.saleDetail.update({
+          where: { id: detail.id },
+          data: {
+            quantity: detail.quantity,
+            unitPrice: detail.unitPrice,
+            subtotal: detail.subtotal,
+          },
+        });
+      }
+
+      const paymentAdjustment = this.paymentAdjustment(sale, total);
+      if (paymentAdjustment) {
+        await tx.salePayment.update({
+          where: { id: paymentAdjustment.paymentId },
+          data: { amount: paymentAdjustment.amount },
+        });
+        if (paymentAdjustment.cashMovementId) {
+          await tx.cashMovement.update({
+            where: { id: paymentAdjustment.cashMovementId },
+            data: { amount: paymentAdjustment.amount },
+          });
+        }
+      }
+
+      const updated = await tx.sale.update({
+        where: { id },
+        data: { total },
+        include: saleInclude,
+      });
+
+      await this.audit.log(
+        {
+          userId: user.sub,
+          action: 'UPDATE',
+          entity: 'Sale',
+          entityId: id,
+          oldData: {
+            reason,
+            total: oldTotal,
+            status: sale.status,
+            details: sale.details.map((detail) => ({
+              id: detail.id,
+              itemType: detail.itemType,
+              productId: detail.productId,
+              description: detail.description,
+              quantity: Number(detail.quantity),
+              unitPrice: Number(detail.unitPrice),
+              subtotal: Number(detail.subtotal),
+            })),
+          },
+          newData: {
+            reason,
+            total,
+            status: sale.status,
+            paymentAdjustment,
+            stockDeltas: Object.fromEntries(stockDeltas),
+            details: nextDetails,
+          },
+        },
+        tx,
+      );
+
+      return updated;
+    });
+  }
+
+  findAll(user: AuthUser) {
+    return this.prisma.sale.findMany({
+      where: user.role === UserRole.ADMIN ? undefined : { userId: user.sub },
+      orderBy: { createdAt: 'desc' },
+      include: saleInclude,
+    });
+  }
+
+  async findOne(id: number, user: AuthUser) {
+    const sale = await this.prisma.sale.findUnique({
+      where: { id },
+      include: saleInclude,
+    });
+    if (!sale) throw new NotFoundException('Venta no encontrada.');
+    if (user.role !== UserRole.ADMIN && sale.userId !== user.sub) {
+      throw new NotFoundException('Venta no encontrada.');
+    }
     return sale;
   }
 
-  byShift(cashShiftId: number) {
+  byShift(cashShiftId: number, user: AuthUser) {
     return this.prisma.sale.findMany({
-      where: { cashShiftId },
+      where: {
+        cashShiftId,
+        ...(user.role === UserRole.ADMIN ? {} : { userId: user.sub }),
+      },
       orderBy: { createdAt: 'desc' },
       include: saleInclude,
     });
   }
 
-  byStay(stayId: number) {
+  byStay(stayId: number, user: AuthUser) {
     return this.prisma.sale.findMany({
-      where: { stayId },
+      where: {
+        stayId,
+        ...(user.role === UserRole.ADMIN ? {} : { userId: user.sub }),
+      },
       orderBy: { createdAt: 'desc' },
       include: saleInclude,
     });
   }
 
-  pendingByStay(stayId: number) {
+  pendingByStay(stayId: number, user: AuthUser) {
     return this.prisma.sale.findMany({
-      where: { stayId, status: SaleStatus.OPEN },
+      where: {
+        stayId,
+        status: SaleStatus.OPEN,
+        ...(user.role === UserRole.ADMIN ? {} : { userId: user.sub }),
+      },
       orderBy: { createdAt: 'desc' },
       include: saleInclude,
     });
@@ -596,6 +857,76 @@ export class SalesService {
     return Number(
       values.reduce((total, value) => total + Number(value), 0).toFixed(2),
     );
+  }
+
+  private productStockDeltas(
+    oldDetails: Array<{
+      itemType: SaleItemType;
+      productId: number | null;
+      quantity: any;
+    }>,
+    nextDetails: Array<{
+      itemType: SaleItemType;
+      productId?: number | null;
+      quantity: number;
+    }>,
+  ) {
+    const deltas = new Map<number, number>();
+    for (const detail of oldDetails) {
+      if (detail.itemType !== SaleItemType.PRODUCT || !detail.productId) continue;
+      deltas.set(
+        detail.productId,
+        (deltas.get(detail.productId) ?? 0) - Number(detail.quantity),
+      );
+    }
+    for (const detail of nextDetails) {
+      if (detail.itemType !== SaleItemType.PRODUCT || !detail.productId) continue;
+      deltas.set(
+        detail.productId,
+        (deltas.get(detail.productId) ?? 0) + Number(detail.quantity),
+      );
+    }
+    return deltas;
+  }
+
+  private paymentAdjustment(
+    sale: Awaited<ReturnType<typeof this.prisma.sale.findUnique>> & {
+      payments: Array<{
+        id: number;
+        amount: any;
+        cashMovementId: number | null;
+      }>;
+    },
+    total: number,
+  ) {
+    if (sale.status !== SaleStatus.PAID) return null;
+
+    const paid = this.sum(sale.payments.map((payment) => Number(payment.amount)));
+    const delta = Number((total - paid).toFixed(2));
+    if (delta === 0) return null;
+
+    const payment = [...sale.payments].sort(
+      (a, b) => Number(b.amount) - Number(a.amount),
+    )[0];
+    if (!payment) {
+      throw new BadRequestException(
+        'La venta pagada no tiene pagos para ajustar.',
+      );
+    }
+
+    const amount = Number((Number(payment.amount) + delta).toFixed(2));
+    if (amount <= 0) {
+      throw new BadRequestException(
+        'El nuevo total no puede dejar un pago en cero o negativo. Anula la venta.',
+      );
+    }
+
+    return {
+      paymentId: payment.id,
+      cashMovementId: payment.cashMovementId,
+      amount,
+      delta,
+    };
   }
 }
 

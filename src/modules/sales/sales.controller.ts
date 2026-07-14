@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -11,6 +12,7 @@ import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CancelSaleDto } from './dto/cancel-sale.dto';
 import { CreateSaleDto, PaySaleDto } from './dto/create-sale.dto';
+import { UpdateSaleDto } from './dto/update-sale.dto';
 import { SalesService } from './sales.service';
 
 @UseGuards(JwtAuthGuard)
@@ -41,24 +43,42 @@ export class SalesController {
     return this.salesService.cancel(id, dto, user);
   }
 
+  @Patch(':id')
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateSaleDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.salesService.update(id, dto, user);
+  }
+
   @Get()
-  findAll() {
-    return this.salesService.findAll();
+  findAll(@CurrentUser() user: any) {
+    return this.salesService.findAll(user);
   }
 
   @Get('by-shift/:cashShiftId')
-  byShift(@Param('cashShiftId', ParseIntPipe) cashShiftId: number) {
-    return this.salesService.byShift(cashShiftId);
+  byShift(
+    @Param('cashShiftId', ParseIntPipe) cashShiftId: number,
+    @CurrentUser() user: any,
+  ) {
+    return this.salesService.byShift(cashShiftId, user);
   }
 
   @Get('by-stay/:stayId')
-  byStay(@Param('stayId', ParseIntPipe) stayId: number) {
-    return this.salesService.byStay(stayId);
+  byStay(
+    @Param('stayId', ParseIntPipe) stayId: number,
+    @CurrentUser() user: any,
+  ) {
+    return this.salesService.byStay(stayId, user);
   }
 
   @Get('pending/by-stay/:stayId')
-  pendingByStay(@Param('stayId', ParseIntPipe) stayId: number) {
-    return this.salesService.pendingByStay(stayId);
+  pendingByStay(
+    @Param('stayId', ParseIntPipe) stayId: number,
+    @CurrentUser() user: any,
+  ) {
+    return this.salesService.pendingByStay(stayId, user);
   }
 
   @Get('account/by-stay/:stayId')
@@ -67,7 +87,7 @@ export class SalesController {
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.salesService.findOne(id);
+  findOne(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: any) {
+    return this.salesService.findOne(id, user);
   }
 }
