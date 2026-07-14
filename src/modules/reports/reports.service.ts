@@ -201,6 +201,48 @@ export class ReportsService {
     };
   }
 
+  async productSalesByUser(query: ReportQueryDto) {
+    const { start, end } = this.range(query);
+    const details = await this.prisma.saleDetail.findMany({
+      where: {
+        itemType: SaleItemType.PRODUCT,
+        sale: this.saleWhere(query, start, end),
+      },
+      include: {
+        product: true,
+        sale: { include: { user: { include: { employee: true } } } },
+      },
+    });
+
+    return {
+      range: { from: start, to: end },
+      rows: Object.values(
+        details.reduce<Record<string, any>>((acc, detail) => {
+          const userName =
+            detail.sale.user.employee?.fullName ?? detail.sale.user.username;
+          const key = `${detail.productId}:${detail.sale.userId}`;
+          acc[key] ??= {
+            productId: detail.productId,
+            product: this.productTitle(detail.product),
+            userId: detail.sale.userId,
+            user: userName,
+            quantity: 0,
+            total: 0,
+          };
+          acc[key].quantity += Number(detail.quantity);
+          acc[key].total = Number(
+            (acc[key].total + Number(detail.subtotal)).toFixed(2),
+          );
+          return acc;
+        }, {}),
+      ).sort((a: any, b: any) =>
+        a.product === b.product
+          ? String(a.user).localeCompare(String(b.user))
+          : String(a.product).localeCompare(String(b.product)),
+      ),
+    };
+  }
+
   /**
    * Reporte unificado de ventas e ingresos.
    * Fusiona totales + desglose por tipo de ítem + anulaciones + ingresos por tipo de habitación.

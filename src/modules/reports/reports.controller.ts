@@ -33,6 +33,11 @@ export class ReportsController {
     return this.reportsService.productSales(query);
   }
 
+  @Get('product-sales-by-user')
+  productSalesByUser(@Query() query: ReportQueryDto) {
+    return this.reportsService.productSalesByUser(query);
+  }
+
   @Get('occupancy')
   occupancy(@Query() query: ReportQueryDto) {
     return this.reportsService.occupancy(query);

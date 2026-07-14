@@ -1,9 +1,11 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateAttendanceDto } from './dto/create-attendance.dto';
 
@@ -14,8 +16,8 @@ export class AttendanceService {
   async create(dto: CreateAttendanceDto) {
     await this.ensureActiveEmployee(dto.employeeId);
     const date = new Date(dto.date);
-    const exists = await this.prisma.attendance.findUnique({
-      where: { employeeId_date: { employeeId: dto.employeeId, date } },
+    const exists = await this.prisma.attendance.findFirst({
+      where: { employeeId: dto.employeeId, date, cashShiftId: null },
     });
     if (exists)
       throw new ConflictException('Ya existe asistencia para ese día.');
@@ -57,18 +59,31 @@ export class AttendanceService {
     return attendance;
   }
 
-  byEmployee(employeeId: number) {
+  async byEmployee(employeeId: number, user: AuthUser) {
+    await this.ensureCanSeeEmployee(employeeId, user);
     return this.prisma.attendance.findMany({
       where: { employeeId },
       orderBy: { date: 'desc' },
+      include: this.include(),
     });
   }
 
-  byRange(from: string, to: string) {
+  async byRange(from: string, to: string, user: AuthUser) {
+    const employeeId =
+      user.role === UserRole.ADMIN
+        ? undefined
+        : await this.employeeIdForUser(user.sub);
     return this.prisma.attendance.findMany({
-      where: { date: { gte: new Date(from), lte: new Date(to) } },
+      where: {
+        date: { gte: new Date(from), lte: new Date(to) },
+        ...(user.role === UserRole.ADMIN
+          ? {}
+          : employeeId
+            ? { employeeId }
+            : { id: -1 }),
+      },
       orderBy: { date: 'desc' },
-      include: { employee: true },
+      include: this.include(),
     });
   }
 
@@ -79,4 +94,34 @@ export class AttendanceService {
     if (!employee)
       throw new NotFoundException('Empleado activo no encontrado.');
   }
+
+  private include() {
+    return {
+      employee: true,
+      cashShift: {
+        include: {
+          openedBy: { include: { employee: true } },
+          closedBy: { include: { employee: true } },
+        },
+      },
+    };
+  }
+
+  private async ensureCanSeeEmployee(employeeId: number, user: AuthUser) {
+    if (user.role === UserRole.ADMIN) return;
+    const ownEmployeeId = await this.employeeIdForUser(user.sub);
+    if (ownEmployeeId !== employeeId) {
+      throw new ForbiddenException('Solo puedes ver tus asistencias.');
+    }
+  }
+
+  private async employeeIdForUser(userId: number) {
+    const found = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { employeeId: true },
+    });
+    return found?.employeeId ?? 0;
+  }
 }
+
+type AuthUser = { sub: number; role: UserRole };

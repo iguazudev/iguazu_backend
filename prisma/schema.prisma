@@ -512,6 +512,7 @@ model CashShift {
   sales         Sale[]
   cashMovements CashMovement[]
   closure       CashClosure?
+  attendance    Attendance?
 
   @@index([status])
 }
@@ -585,6 +586,8 @@ model Attendance {
   id         Int              @id @default(autoincrement())
   employeeId Int
   employee   Employee         @relation(fields: [employeeId], references: [id])
+  cashShiftId Int?            @unique
+  cashShift   CashShift?      @relation(fields: [cashShiftId], references: [id])
   date       DateTime         @db.Date
   checkIn    DateTime?
   checkOut   DateTime?
@@ -593,7 +596,8 @@ model Attendance {
   createdAt  DateTime         @default(now())
   updatedAt  DateTime         @updatedAt
 
-  @@unique([employeeId, date])
+  @@index([employeeId, date])
+  @@index([cashShiftId])
 }
 
 model StaffAdvance {

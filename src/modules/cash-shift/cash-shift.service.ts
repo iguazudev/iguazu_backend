@@ -65,6 +65,19 @@ export class CashShiftService {
         },
       });
 
+      if (cashShift.openedBy.employeeId) {
+        await this.prisma.attendance.create({
+          data: {
+            employeeId: cashShift.openedBy.employeeId,
+            cashShiftId: cashShift.id,
+            date: this.dateOnly(cashShift.openedAt),
+            checkIn: cashShift.openedAt,
+            status: 'PRESENT',
+            notes: `Caja #${cashShift.id}`,
+          },
+        });
+      }
+
       await this.prisma.auditLog.create({
         data: {
           userId,
@@ -139,5 +152,9 @@ export class CashShiftService {
     }
 
     return cashShift;
+  }
+
+  private dateOnly(value: Date) {
+    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
   }
 }

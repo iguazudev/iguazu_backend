@@ -92,6 +92,11 @@ export class CashClosuresService {
         );
       }
 
+      await tx.attendance.updateMany({
+        where: { cashShiftId: openShift.id, checkOut: null },
+        data: { checkOut: new Date() },
+      });
+
       const closure = await tx.cashClosure.create({
         data: {
           cashShiftId: openShift.id,

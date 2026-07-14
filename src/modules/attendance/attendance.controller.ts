@@ -9,6 +9,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AttendanceService } from './attendance.service';
 import { CreateAttendanceDto } from './dto/create-attendance.dto';
@@ -34,12 +35,19 @@ export class AttendanceController {
   }
 
   @Get('employee/:employeeId')
-  byEmployee(@Param('employeeId', ParseIntPipe) employeeId: number) {
-    return this.attendanceService.byEmployee(employeeId);
+  byEmployee(
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @CurrentUser() user: any,
+  ) {
+    return this.attendanceService.byEmployee(employeeId, user);
   }
 
   @Get('range')
-  byRange(@Query('from') from: string, @Query('to') to: string) {
-    return this.attendanceService.byRange(from, to);
+  byRange(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.attendanceService.byRange(from, to, user);
   }
 }

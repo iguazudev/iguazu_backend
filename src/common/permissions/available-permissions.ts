@@ -65,6 +65,7 @@ export const AVAILABLE_PERMISSIONS = [
   'GET /reports/sales-full',
   'GET /reports/sales-by-item-type',
   'GET /reports/product-sales',
+  'GET /reports/product-sales-by-user',
   'GET /reports/occupancy',
   'GET /reports/inventory',
   'GET /reports/staff',

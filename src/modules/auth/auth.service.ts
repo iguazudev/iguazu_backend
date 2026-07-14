@@ -32,12 +32,6 @@ export class AuthService {
       throw new UnauthorizedException('Usuario o contraseña incorrectos.');
     }
 
-    // Registrar asistencia automática del día si el usuario es empleado.
-    // Es solo historial: no afecta el cálculo de pagos directamente.
-    if (user.employeeId) {
-      await this.recordTodayAttendance(user.employeeId);
-    }
-
     const payload = {
       sub: user.id,
       username: user.username,
@@ -73,36 +67,6 @@ export class AuthService {
       ...user,
       permissions: await this.permissionsForRole(user.role),
     };
-  }
-
-  /**
-   * Crea (o actualiza) la asistencia de hoy para el empleado.
-   * Idempotente: si ya existe asistencia del día, no duplica.
-   * Define LATE si el login ocurre después de la hora de inicio esperada.
-   */
-  private async recordTodayAttendance(employeeId: number) {
-    const now = new Date();
-    const today = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-    );
-
-    // Hora límite configurable; por defecto 09:00 local.
-    const lateThreshold = new Date(today);
-    lateThreshold.setHours(9, 0, 0, 0);
-    const status = now > lateThreshold ? 'LATE' : 'PRESENT';
-
-    await this.prisma.attendance.upsert({
-      where: { employeeId_date: { employeeId, date: today } },
-      update: {}, // no sobrescribe si ya existe
-      create: {
-        employeeId,
-        date: today,
-        checkIn: now,
-        status,
-      },
-    });
   }
 
   private async permissionsForRole(role: UserRole) {

@@ -83,6 +83,8 @@ const CASHIER_PERMISSIONS = [
   'POST /inventory/adjust',
   'GET /inventory/movements',
   'GET /products',
+  'GET /attendance/employee/:employeeId',
+  'GET /attendance/range',
   'POST /staff-advances',
   'GET /staff-advances',
   'POST /staff-discounts',
