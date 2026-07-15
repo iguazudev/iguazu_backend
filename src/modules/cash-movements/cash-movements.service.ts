@@ -14,6 +14,30 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateCashExpenseDto } from './dto/create-cash-expense.dto';
 import { RecordCashMovementDto } from './dto/record-cash-movement.dto';
 
+const movementInclude = {
+  cashShift: {
+    include: {
+      openedBy: { include: { employee: true } },
+      closedBy: { include: { employee: true } },
+    },
+  },
+  user: { include: { employee: true } },
+  salePayment: {
+    include: {
+      sale: {
+        include: {
+          customer: true,
+          stay: { include: { room: true } },
+          details: { include: { product: true } },
+        },
+      },
+    },
+  },
+  staffAdvance: { include: { employee: true } },
+  staffPayment: { include: { employee: true } },
+  staffDiscount: { include: { employee: true } },
+};
+
 @Injectable()
 export class CashMovementsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -63,21 +87,22 @@ export class CashMovementsService {
     return movement;
   }
 
-  findAll(user: { sub: number; role: UserRole }) {
-    return this.prisma.cashMovement.findMany({
+  async findAll(user: { sub: number; role: UserRole }) {
+    const movements = await this.prisma.cashMovement.findMany({
       where:
         user.role === UserRole.ADMIN
           ? undefined
           : { cashShift: { openedById: user.sub } },
       orderBy: { occurredAt: 'desc' },
-      include: { cashShift: true, user: { include: { employee: true } } },
+      include: movementInclude,
     });
+    return this.withReferenceSales(movements);
   }
 
   async findOne(id: number, user: { sub: number; role: UserRole }) {
     const movement = await this.prisma.cashMovement.findUnique({
       where: { id },
-      include: { cashShift: true, user: { include: { employee: true } } },
+      include: movementInclude,
     });
 
     if (
@@ -87,18 +112,19 @@ export class CashMovementsService {
       throw new NotFoundException('Movimiento de caja no encontrado.');
     }
 
-    return movement;
+    return (await this.withReferenceSales([movement]))[0];
   }
 
-  byShift(cashShiftId: number, user: { sub: number; role: UserRole }) {
-    return this.prisma.cashMovement.findMany({
+  async byShift(cashShiftId: number, user: { sub: number; role: UserRole }) {
+    const movements = await this.prisma.cashMovement.findMany({
       where:
         user.role === UserRole.ADMIN
           ? { cashShiftId }
           : { cashShiftId, cashShift: { openedById: user.sub } },
       orderBy: { occurredAt: 'desc' },
-      include: { user: { include: { employee: true } } },
+      include: movementInclude,
     });
+    return this.withReferenceSales(movements);
   }
 
   async expense(
@@ -198,5 +224,35 @@ export class CashMovementsService {
 
       return reversal;
     });
+  }
+
+  private async withReferenceSales<T extends { referenceType: string | null; referenceId: number | null; salePayment?: any }>(
+    movements: T[],
+  ) {
+    const saleIds = movements
+      .filter((movement) => !movement.salePayment && ['SALE', 'SALE_VOID'].includes(String(movement.referenceType)))
+      .map((movement) => movement.referenceId)
+      .filter((id): id is number => typeof id === 'number');
+    if (!saleIds.length) {
+      return movements.map((movement) => ({
+        ...movement,
+        amount: movement.salePayment?.amount ?? (movement as any).amount,
+      }));
+    }
+
+    const sales = await this.prisma.sale.findMany({
+      where: { id: { in: [...new Set(saleIds)] } },
+      include: {
+        customer: true,
+        stay: { include: { room: true } },
+        details: { include: { product: true } },
+      },
+    });
+    const salesById = new Map(sales.map((sale) => [sale.id, sale]));
+    return movements.map((movement) => ({
+      ...movement,
+      amount: movement.salePayment?.amount ?? (movement as any).amount,
+      referenceSale: movement.referenceId ? salesById.get(movement.referenceId) : undefined,
+    }));
   }
 }

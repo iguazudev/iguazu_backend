@@ -87,6 +87,12 @@ enum PaymentMethod {
   TRANSFER
 }
 
+enum StaffAdvanceStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum AttendanceStatus {
   PRESENT
   ABSENT
@@ -606,6 +612,10 @@ model StaffAdvance {
   employee       Employee      @relation(fields: [employeeId], references: [id])
   amount         Decimal       @db.Decimal(10, 2)
   reason         String?
+  paymentMethod  PaymentMethod @default(CASH)
+  status         StaffAdvanceStatus @default(PENDING)
+  reviewedAt     DateTime?
+  reviewNote     String?
   requestedById  Int
   requestedBy    User          @relation("AdvanceRequestedBy", fields: [requestedById], references: [id])
   cashMovementId Int?          @unique

@@ -22,7 +22,9 @@ import { UpdateSaleDto } from './dto/update-sale.dto';
 
 const saleInclude = {
   customer: true,
-  stay: true,
+  stay: { include: { room: true } },
+  user: { include: { employee: true } },
+  cashShift: true,
   details: { include: { product: true, stay: true } },
   payments: { include: { cashMovement: true } },
   invoice: { select: { id: true, docNumber: true, invoiceType: true, status: true, sunatCode: true } },
@@ -408,6 +410,16 @@ export class SalesService {
         'La venta tiene comprobante emitido. Corrige con nota de crédito/débito.',
       );
     }
+    await this.validateSaleEditRelations(dto);
+    const editedStay = dto.stayId
+      ? await this.prisma.stay.findUnique({
+          where: { id: dto.stayId },
+          include: { room: true },
+        })
+      : null;
+    const roomRentDescription = editedStay?.room?.roomNumber
+      ? `Alojamiento Hab. ${editedStay.room.roomNumber}`
+      : null;
 
     const detailsById = new Map(sale.details.map((detail) => [detail.id, detail]));
     const requestedIds = new Set(
@@ -464,8 +476,11 @@ export class SalesService {
           id: detail.id,
           itemType: detail.itemType,
           productId: detail.productId,
-          stayId: detail.stayId,
-          description: detail.description,
+          stayId: detail.itemType === SaleItemType.ROOM_RENT ? (dto.stayId ?? detail.stayId) : detail.stayId,
+          description:
+            detail.itemType === SaleItemType.ROOM_RENT && roomRentDescription
+              ? roomRentDescription
+              : detail.description,
           quantity,
           unitPrice,
           subtotal: Number((quantity * unitPrice).toFixed(2)),
@@ -560,6 +575,8 @@ export class SalesService {
         await tx.saleDetail.update({
           where: { id: detail.id },
           data: {
+            stayId: detail.stayId,
+            description: detail.description,
             quantity: detail.quantity,
             unitPrice: detail.unitPrice,
             subtotal: detail.subtotal,
@@ -581,11 +598,49 @@ export class SalesService {
         }
       }
 
+      for (const payment of sale.payments) {
+        if (!payment.cashMovementId) continue;
+        await tx.cashMovement.update({
+          where: { id: payment.cashMovementId },
+          data: {
+            amount:
+              paymentAdjustment?.paymentId === payment.id
+                ? paymentAdjustment.amount
+                : Number(payment.amount),
+          },
+        });
+      }
+
       const updated = await tx.sale.update({
         where: { id },
-        data: { total },
+        data: {
+          total,
+          userId: dto.userId,
+          cashShiftId: dto.cashShiftId,
+          customerId: dto.customerId,
+          stayId: dto.stayId,
+        },
         include: saleInclude,
       });
+
+      if (dto.paymentMethod || dto.cashShiftId || dto.userId) {
+        for (const payment of sale.payments) {
+          await tx.salePayment.update({
+            where: { id: payment.id },
+            data: { paymentMethod: dto.paymentMethod },
+          });
+          if (payment.cashMovementId) {
+            await tx.cashMovement.update({
+              where: { id: payment.cashMovementId },
+              data: {
+                paymentMethod: dto.paymentMethod,
+                cashShiftId: dto.cashShiftId,
+                userId: dto.userId,
+              },
+            });
+          }
+        }
+      }
 
       await this.audit.log(
         {
@@ -597,6 +652,11 @@ export class SalesService {
             reason,
             total: oldTotal,
             status: sale.status,
+            userId: sale.userId,
+            cashShiftId: sale.cashShiftId,
+            customerId: sale.customerId,
+            stayId: sale.stayId,
+            paymentMethods: sale.payments.map((payment) => payment.paymentMethod),
             details: sale.details.map((detail) => ({
               id: detail.id,
               itemType: detail.itemType,
@@ -611,6 +671,11 @@ export class SalesService {
             reason,
             total,
             status: sale.status,
+            userId: updated.userId,
+            cashShiftId: updated.cashShiftId,
+            customerId: updated.customerId,
+            stayId: updated.stayId,
+            paymentMethod: dto.paymentMethod,
             paymentAdjustment,
             stockDeltas: Object.fromEntries(stockDeltas),
             details: nextDetails,
@@ -761,6 +826,39 @@ export class SalesService {
           });
     if (!openShift) throw new NotFoundException('No tienes caja abierta.');
     return openShift;
+  }
+
+  private async validateSaleEditRelations(dto: UpdateSaleDto) {
+    const checks: Promise<unknown>[] = [];
+    if (dto.userId !== undefined) {
+      checks.push(
+        this.prisma.user.findFirst({ where: { id: dto.userId, active: true } }).then((row) => {
+          if (!row) throw new NotFoundException('Usuario activo no encontrado.');
+        }),
+      );
+    }
+    if (dto.cashShiftId !== undefined) {
+      checks.push(
+        this.prisma.cashShift.findUnique({ where: { id: dto.cashShiftId } }).then((row) => {
+          if (!row) throw new NotFoundException('Caja no encontrada.');
+        }),
+      );
+    }
+    if (dto.customerId !== undefined) {
+      checks.push(
+        this.prisma.customer.findUnique({ where: { id: dto.customerId } }).then((row) => {
+          if (!row) throw new NotFoundException('Cliente no encontrado.');
+        }),
+      );
+    }
+    if (dto.stayId !== undefined) {
+      checks.push(
+        this.prisma.stay.findUnique({ where: { id: dto.stayId } }).then((row) => {
+          if (!row) throw new NotFoundException('Estadía no encontrada.');
+        }),
+      );
+    }
+    await Promise.all(checks);
   }
 
   private validateDetail(detail: any) {

@@ -104,6 +104,8 @@ export const AVAILABLE_PERMISSIONS = [
   'GET /attendance/employee/:employeeId',
   'GET /attendance/range',
   'POST /staff-advances',
+  'POST /staff-advances/:id/approve',
+  'POST /staff-advances/:id/reject',
   'GET /staff-advances',
   'POST /staff-discounts',
   'GET /staff-discounts',

@@ -1,6 +1,8 @@
+import { PaymentMethod } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsEnum,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -38,6 +40,30 @@ export class UpdateSaleDto {
   @IsString()
   @IsNotEmpty()
   reason!: string;
+
+  @Type(() => Number)
+  @IsInt()
+  @IsOptional()
+  userId?: number;
+
+  @Type(() => Number)
+  @IsInt()
+  @IsOptional()
+  cashShiftId?: number;
+
+  @Type(() => Number)
+  @IsInt()
+  @IsOptional()
+  customerId?: number;
+
+  @Type(() => Number)
+  @IsInt()
+  @IsOptional()
+  stayId?: number;
+
+  @IsEnum(PaymentMethod)
+  @IsOptional()
+  paymentMethod?: PaymentMethod;
 
   @IsArray()
   @ValidateNested({ each: true })

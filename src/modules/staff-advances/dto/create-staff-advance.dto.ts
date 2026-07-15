@@ -12,7 +12,8 @@ import {
 export class CreateStaffAdvanceDto {
   @Type(() => Number)
   @IsInt()
-  employeeId!: number;
+  @IsOptional()
+  employeeId?: number;
 
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })

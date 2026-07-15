@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import {
   CashMovementType,
   InventoryMovementType,
+  PaymentMethod,
   SaleItemType,
   SaleStatus,
 } from '@prisma/client';
@@ -25,7 +26,22 @@ export class ReportsService {
       include: {
         openedBy: { include: { employee: true } },
         closedBy: { include: { employee: true } },
-        cashMovements: true,
+        cashMovements: {
+          include: {
+            user: { include: { employee: true } },
+            salePayment: {
+              include: {
+                sale: {
+                  include: {
+                    customer: true,
+                    stay: { include: { room: true } },
+                    details: { include: { product: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
         sales: true,
         closure: {
           include: {
@@ -48,6 +64,9 @@ export class ReportsService {
     const closures = shifts.flatMap((shift) =>
       shift.closure ? [{ ...shift.closure, shift }] : [],
     );
+    const currentClosures = closures.map((closure) =>
+      this.currentClosureTotals(closure),
+    );
 
     return {
       range: { from: start, to: end },
@@ -63,26 +82,26 @@ export class ReportsService {
       incomeTotal: this.sum(
         movements
           .filter((movement) => movement.type === CashMovementType.INCOME)
-          .map((movement) => Number(movement.amount)),
+          .map((movement) => this.movementAmount(movement)),
       ),
       expenseTotal: this.sum(
         movements
           .filter((movement) => movement.type === CashMovementType.EXPENSE)
-          .map((movement) => Number(movement.amount)),
+          .map((movement) => this.movementAmount(movement)),
       ),
-      expectedTotal: this.sum(closures.map((closure) => Number(closure.totalExpected))),
-      countedTotal: this.sum(closures.map((closure) => Number(closure.totalCounted))),
-      differenceTotal: this.sum(closures.map((closure) => Number(closure.difference))),
+      expectedTotal: this.sum(currentClosures.map((closure) => Number(closure.totalExpected))),
+      countedTotal: this.sum(currentClosures.map((closure) => Number(closure.totalCounted))),
+      differenceTotal: this.sum(currentClosures.map((closure) => Number(closure.difference))),
       // Cuadres pendientes: cierres con diferencia != 0 que aún no fueron cuadrados.
-      unsettledCount: closures.filter(
+      unsettledCount: currentClosures.filter(
         (closure) => Number(closure.difference) !== 0 && !closure.settled,
       ).length,
       unsettledTotal: this.sum(
-        closures
+        currentClosures
           .filter((closure) => Number(closure.difference) !== 0 && !closure.settled)
           .map((closure) => Number(closure.difference)),
       ),
-      closures: closures.map((closure) => ({
+      closures: currentClosures.map((closure) => ({
         id: closure.id,
         cashShiftId: closure.cashShiftId,
         openedBy: closure.shift.openedBy.employee?.fullName ?? closure.shift.openedBy.username,
@@ -95,6 +114,21 @@ export class ReportsService {
         settledAt: closure.settledAt,
         settledBy: closure.settledBy?.employee?.fullName ?? closure.settledBy?.username,
         settleReason: closure.settleReason,
+      })),
+      movements: movements.map((movement: any) => ({
+        id: movement.id,
+        cashShiftId: movement.cashShiftId,
+        type: movement.type,
+        category: movement.category,
+        paymentMethod: movement.paymentMethod,
+        amount: this.movementAmount(movement),
+        user: movement.user?.employee?.fullName ?? movement.user?.username ?? '-',
+        description: movement.description,
+        occurredAt: movement.occurredAt,
+        saleId: movement.salePayment?.sale?.id ?? null,
+        customer: movement.salePayment?.sale?.customer?.fullName ?? 'Consumidor final',
+        room: movement.salePayment?.sale?.stay?.room?.roomNumber ?? null,
+        details: this.saleDetailsText(movement.salePayment?.sale?.details ?? []),
       })),
     };
   }
@@ -210,7 +244,12 @@ export class ReportsService {
       },
       include: {
         product: true,
-        sale: { include: { user: { include: { employee: true } } } },
+        sale: {
+          include: {
+            user: { include: { employee: true } },
+            cashShift: { include: { openedBy: { include: { employee: true } } } },
+          },
+        },
       },
     });
 
@@ -220,12 +259,20 @@ export class ReportsService {
         details.reduce<Record<string, any>>((acc, detail) => {
           const userName =
             detail.sale.user.employee?.fullName ?? detail.sale.user.username;
-          const key = `${detail.productId}:${detail.sale.userId}`;
+          const cashUser =
+            detail.sale.cashShift.openedBy.employee?.fullName ??
+            detail.sale.cashShift.openedBy.username;
+          const workShift = this.cashShiftWorkShift(detail.sale.cashShift.openedAt);
+          const key = `${detail.productId}:${detail.sale.userId}:${detail.sale.cashShiftId}:${workShift}`;
           acc[key] ??= {
             productId: detail.productId,
             product: this.productTitle(detail.product),
             userId: detail.sale.userId,
             user: userName,
+            cashShiftId: detail.sale.cashShiftId,
+            cashShift: `Caja #${detail.sale.cashShiftId} - ${cashUser}`,
+            cashOpenedAt: detail.sale.cashShift.openedAt,
+            workShift,
             quantity: 0,
             total: 0,
           };
@@ -237,7 +284,8 @@ export class ReportsService {
         }, {}),
       ).sort((a: any, b: any) =>
         a.product === b.product
-          ? String(a.user).localeCompare(String(b.user))
+          ? String(a.cashShiftId).localeCompare(String(b.cashShiftId)) ||
+            String(a.user).localeCompare(String(b.user))
           : String(a.product).localeCompare(String(b.product)),
       ),
     };
@@ -254,7 +302,13 @@ export class ReportsService {
     const [sales, details, cancelled] = await Promise.all([
       this.prisma.sale.findMany({
         where: saleWhere,
-        include: { payments: true, user: { include: { employee: true } } },
+        include: {
+          payments: true,
+          customer: true,
+          stay: { include: { room: true } },
+          user: { include: { employee: true } },
+          details: { include: { product: true } },
+        },
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.saleDetail.findMany({
@@ -333,6 +387,17 @@ export class ReportsService {
         cancelledAt: sale.cancelledAt,
         cancelledBy:
           sale.user?.employee?.fullName ?? sale.user?.username ?? '-',
+      })),
+      sales: sales.map((sale) => ({
+        id: sale.id,
+        status: sale.status,
+        customer: sale.customer?.fullName ?? 'Consumidor final',
+        room: sale.stay?.room?.roomNumber ?? null,
+        user: sale.user.employee?.fullName ?? sale.user.username,
+        paymentMethod: sale.payments.map((payment) => payment.paymentMethod).join(' + ') || '-',
+        total: Number(sale.total),
+        createdAt: sale.createdAt,
+        details: this.saleDetailsText(sale.details),
       })),
     };
   }
@@ -620,9 +685,60 @@ export class ReportsService {
     return Number(values.reduce((total, value) => total + Number(value), 0).toFixed(2));
   }
 
+  private movementAmount(movement: any) {
+    return Number(movement.salePayment?.amount ?? movement.amount);
+  }
+
+  private currentClosureTotals(closure: any) {
+    const expectedByMethod = Object.fromEntries(
+      Object.values(PaymentMethod).map((method) => {
+        const movementTotal = this.sum(
+          (closure.shift.cashMovements ?? [])
+            .filter((movement: any) => movement.paymentMethod === method)
+            .map((movement: any) =>
+              movement.type === CashMovementType.INCOME
+                ? this.movementAmount(movement)
+                : -this.movementAmount(movement),
+            ),
+        );
+        return [
+          method,
+          this.sum([
+            movementTotal,
+            method === PaymentMethod.CASH ? Number(closure.shift.openingAmount) : 0,
+          ]),
+        ];
+      }),
+    );
+    const details = closure.details ?? [];
+    const totalExpected = this.sum(
+      details.map((detail: any) =>
+        Number(expectedByMethod[detail.paymentMethod] ?? detail.expectedAmount),
+      ),
+    );
+    const totalCounted = this.sum(details.map((detail: any) => Number(detail.countedAmount)));
+    return {
+      ...closure,
+      totalExpected,
+      totalCounted,
+      difference: Number((totalCounted - totalExpected).toFixed(2)),
+    };
+  }
+
+  private saleDetailsText(details: Array<{ quantity: any; description: string; subtotal: any }>) {
+    return details
+      .map((detail) => `${Number(detail.quantity)} x ${detail.description} (${Number(detail.subtotal).toFixed(2)})`)
+      .join(', ');
+  }
+
   private productTitle(product?: { name?: string | null; description?: string | null } | null) {
     const name = product?.name?.trim() || 'Producto';
     const description = product?.description?.trim();
     return description ? `${name} - ${description}` : name;
+  }
+
+  private cashShiftWorkShift(openedAt: Date) {
+    const hour = openedAt.getHours();
+    return hour >= 15 || hour < 6 ? 'Turno noche' : 'Turno día';
   }
 }

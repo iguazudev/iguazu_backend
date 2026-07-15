@@ -133,10 +133,7 @@ export class CashClosuresService {
     });
 
     return Promise.all(
-      closures.map(async (closure) => ({
-        ...closure,
-        summary: await this.shiftSummary(closure.cashShift),
-      })),
+      closures.map((closure) => this.closureWithCurrentExpected(closure)),
     );
   }
 
@@ -146,14 +143,14 @@ export class CashClosuresService {
       include: { cashShift: { include: this.shiftInclude() }, details: true },
     });
     if (!closure) throw new NotFoundException('Cierre de caja no encontrado.');
-    return { ...closure, summary: await this.shiftSummary(closure.cashShift) };
+    return this.closureWithCurrentExpected(closure);
   }
 
   private shiftInclude() {
     return {
       openedBy: { include: { employee: true } },
       closedBy: { include: { employee: true } },
-      cashMovements: true,
+      cashMovements: { include: { salePayment: true } },
       sales: { include: { details: true, payments: true } },
     };
   }
@@ -225,6 +222,32 @@ export class CashClosuresService {
     };
   }
 
+  private async closureWithCurrentExpected(closure: any) {
+    const summary = await this.shiftSummary(closure.cashShift);
+    const details = (closure.details ?? []).map((detail: any) => {
+      const expectedAmount = Number(
+        summary.expectedByMethod?.[detail.paymentMethod] ?? detail.expectedAmount ?? 0,
+      );
+      const countedAmount = Number(detail.countedAmount ?? 0);
+      return {
+        ...detail,
+        expectedAmount,
+        countedAmount,
+        difference: Number((countedAmount - expectedAmount).toFixed(2)),
+      };
+    });
+    const totalExpected = this.sum(details.map((detail: any) => detail.expectedAmount));
+    const totalCounted = this.sum(details.map((detail: any) => detail.countedAmount));
+    return {
+      ...closure,
+      details,
+      totalExpected,
+      totalCounted,
+      difference: Number((totalCounted - totalExpected).toFixed(2)),
+      summary: { ...summary, totalExpected },
+    };
+  }
+
   private expectedForMethod(
     shift: { openingAmount: unknown },
     movements: any[],
@@ -235,8 +258,8 @@ export class CashClosuresService {
         .filter((movement) => movement.paymentMethod === paymentMethod)
         .map((movement) =>
           movement.type === CashMovementType.INCOME
-            ? Number(movement.amount)
-            : -Number(movement.amount),
+            ? Number(movement.salePayment?.amount ?? movement.amount)
+            : -Number(movement.salePayment?.amount ?? movement.amount),
         ),
     );
 
@@ -429,7 +452,7 @@ export class CashClosuresService {
   ) {
     const closure = await this.prisma.cashClosure.findUnique({
       where: { id: closureId },
-      include: { cashShift: true },
+      include: { cashShift: { include: this.shiftInclude() }, details: true },
     });
     if (!closure) {
       throw new NotFoundException('Cierre de caja no encontrado.');
@@ -438,7 +461,8 @@ export class CashClosuresService {
       throw new BadRequestException('Este cierre ya fue cuadrado.');
     }
 
-    const difference = Number(closure.difference);
+    const currentClosure = await this.closureWithCurrentExpected(closure);
+    const difference = Number(currentClosure.difference);
     if (difference === 0) {
       throw new BadRequestException('La caja cuadró exactamente. No hay nada que cuadrar.');
     }
