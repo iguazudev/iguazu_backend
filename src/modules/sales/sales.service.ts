@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -17,7 +18,7 @@ import {
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CancelSaleDto } from './dto/cancel-sale.dto';
-import { CreateSaleDto, PaySaleDto } from './dto/create-sale.dto';
+import { CreateRetroactiveSaleDto, CreateSaleDto, PaySaleDto } from './dto/create-sale.dto';
 import { UpdateSaleDto } from './dto/update-sale.dto';
 
 const saleInclude = {
@@ -38,9 +39,19 @@ export class SalesService {
   ) {}
 
   async create(dto: CreateSaleDto, user: AuthUser) {
+    return this.createInternal(dto, user);
+  }
+
+  async createRetroactive(dto: CreateRetroactiveSaleDto, user: AuthUser) {
+    return this.createInternal(dto, user, dto.reason.trim());
+  }
+
+  private async createInternal(dto: CreateSaleDto, user: AuthUser, retroactiveReason?: string) {
     if (!dto.details?.length)
       throw new BadRequestException('La venta requiere detalles.');
-    const openShift = await this.openShiftFor(user, dto.cashShiftId);
+    const cashShift = retroactiveReason
+      ? await this.retroactiveShiftFor(user, dto.cashShiftId, retroactiveReason)
+      : await this.openShiftFor(user, dto.cashShiftId);
     const stay = dto.stayId
       ? await this.prisma.stay.findFirst({
           where: { id: dto.stayId, status: StayStatus.ACTIVE },
@@ -64,6 +75,9 @@ export class SalesService {
       throw new BadRequestException(
         'Para dejar un cargo pendiente selecciona una estadía.',
       );
+    }
+    if (retroactiveReason && isCharge) {
+      throw new BadRequestException('El cargo retroactivo debe registrarse con pago.');
     }
     const paid = this.sum(payments.map((payment) => payment.amount));
     if (!isCharge && total !== paid)
@@ -151,7 +165,7 @@ export class SalesService {
         data: {
           customerId: dto.customerId,
           stayId: dto.stayId,
-          cashShiftId: openShift.id,
+          cashShiftId: cashShift.id,
           userId: user.sub,
           total,
           status: isCharge ? SaleStatus.OPEN : SaleStatus.PAID,
@@ -190,13 +204,15 @@ export class SalesService {
       for (const payment of payments.filter((item) => item.amount > 0)) {
         const movement = await tx.cashMovement.create({
           data: {
-            cashShiftId: openShift.id,
+            cashShiftId: cashShift.id,
             userId: user.sub,
             type: CashMovementType.INCOME,
             category: this.saleCategory(details),
             amount: payment.amount,
             paymentMethod: payment.paymentMethod,
-            description: `Venta #${sale.id}`,
+            description: retroactiveReason
+              ? `Venta retroactiva #${sale.id}: ${retroactiveReason}`
+              : `Venta #${sale.id}`,
             referenceType: 'SALE',
             referenceId: sale.id,
           },
@@ -211,10 +227,22 @@ export class SalesService {
         });
       }
 
-      return tx.sale.findUnique({
+      const saved = await tx.sale.findUnique({
         where: { id: sale.id },
         include: saleInclude,
       });
+      if (retroactiveReason) {
+        await tx.auditLog.create({
+          data: {
+            userId: user.sub,
+            action: 'SALE_RETROACTIVE',
+            entity: 'Sale',
+            entityId: sale.id,
+            newData: { reason: retroactiveReason, cashShiftId: cashShift.id, sale: saved } as any,
+          },
+        });
+      }
+      return saved;
     });
   }
 
@@ -836,6 +864,19 @@ export class SalesService {
           });
     if (!openShift) throw new NotFoundException('No tienes caja abierta.');
     return openShift;
+  }
+
+  private async retroactiveShiftFor(user: AuthUser, cashShiftId?: number, reason?: string) {
+    if (user.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Solo ADMIN puede registrar ventas retroactivas.');
+    }
+    if (!cashShiftId) throw new BadRequestException('Selecciona la caja cerrada.');
+    if (!reason?.trim()) throw new BadRequestException('El motivo es requerido.');
+    const cashShift = await this.prisma.cashShift.findFirst({
+      where: { id: cashShiftId, status: CashShiftStatus.CLOSED },
+    });
+    if (!cashShift) throw new NotFoundException('Caja cerrada no encontrada.');
+    return cashShift;
   }
 
   private async validateSaleEditRelations(dto: UpdateSaleDto) {

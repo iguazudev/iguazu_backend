@@ -4,6 +4,7 @@ import {
   IsInt,
   IsNumber,
   IsOptional,
+  IsString,
   Min,
 } from 'class-validator';
 
@@ -40,4 +41,8 @@ export class CheckInDto {
   @IsDateString()
   @IsOptional()
   expectedCheckOut?: string;
+
+  @IsString()
+  @IsOptional()
+  retroactiveReason?: string;
 }

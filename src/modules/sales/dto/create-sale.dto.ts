@@ -93,6 +93,12 @@ export class CreateSaleDto {
   invoiceNumber?: string;
 }
 
+export class CreateRetroactiveSaleDto extends CreateSaleDto {
+  @IsString()
+  @IsNotEmpty()
+  reason!: string;
+}
+
 export class PaySaleDto {
   @Type(() => Number)
   @IsInt()

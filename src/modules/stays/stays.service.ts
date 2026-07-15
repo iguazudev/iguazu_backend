@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -39,7 +40,9 @@ export class StaysService {
   constructor(private readonly prisma: PrismaService) {}
 
   async checkIn(dto: CheckInDto, user: AuthUser) {
-    const openShift = await this.openShiftFor(user, dto.cashShiftId);
+    const cashShift = dto.retroactiveReason?.trim()
+      ? await this.retroactiveShiftFor(user, dto.cashShiftId, dto.retroactiveReason)
+      : await this.openShiftFor(user, dto.cashShiftId);
 
     const room = await this.prisma.room.findFirst({
       where: { id: dto.roomId, active: true },
@@ -104,7 +107,7 @@ export class StaysService {
       if (!customer) throw new NotFoundException('Cliente no encontrado.');
     }
 
-    if (dto.expectedCheckOut) {
+    if (dto.expectedCheckOut && !dto.retroactiveReason?.trim()) {
       const expected = new Date(dto.expectedCheckOut);
       if (expected.getTime() <= Date.now()) {
         throw new BadRequestException(
@@ -126,10 +129,26 @@ export class StaysService {
           agreedPrice,
           status: StayStatus.ACTIVE,
           createdById: user.sub,
-          cashShiftId: openShift.id,
+          cashShiftId: cashShift.id,
         },
         include: stayInclude,
       });
+
+      if (dto.retroactiveReason?.trim()) {
+        await tx.auditLog.create({
+          data: {
+            userId: user.sub,
+            action: 'STAY_RETROACTIVE_CHECKIN',
+            entity: 'Stay',
+            entityId: stay.id,
+            newData: {
+              reason: dto.retroactiveReason.trim(),
+              cashShiftId: cashShift.id,
+              stay,
+            } as any,
+          },
+        });
+      }
 
       await tx.room.update({
         where: { id: dto.roomId },
@@ -298,6 +317,19 @@ export class StaysService {
           });
     if (!openShift) throw new NotFoundException('No tienes caja abierta.');
     return openShift;
+  }
+
+  private async retroactiveShiftFor(user: AuthUser, cashShiftId?: number, reason?: string) {
+    if (user.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Solo ADMIN puede registrar check-in retroactivo.');
+    }
+    if (!cashShiftId) throw new BadRequestException('Selecciona la caja cerrada.');
+    if (!reason?.trim()) throw new BadRequestException('El motivo es requerido.');
+    const cashShift = await this.prisma.cashShift.findFirst({
+      where: { id: cashShiftId, status: CashShiftStatus.CLOSED },
+    });
+    if (!cashShift) throw new NotFoundException('Caja cerrada no encontrada.');
+    return cashShift;
   }
 
   private sum(values: number[]) {

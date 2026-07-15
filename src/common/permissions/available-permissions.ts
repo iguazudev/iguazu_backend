@@ -86,6 +86,7 @@ export const AVAILABLE_PERMISSIONS = [
   'PATCH /rooms/:id',
   'PATCH /rooms/:id/toggle-active',
   'POST /sales',
+  'POST /sales/retroactive',
   'POST /sales/:id/pay',
   'POST /sales/:id/cancel',
   'PATCH /sales/:id',

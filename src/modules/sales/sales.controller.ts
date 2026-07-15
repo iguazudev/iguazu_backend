@@ -11,7 +11,7 @@ import {
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CancelSaleDto } from './dto/cancel-sale.dto';
-import { CreateSaleDto, PaySaleDto } from './dto/create-sale.dto';
+import { CreateRetroactiveSaleDto, CreateSaleDto, PaySaleDto } from './dto/create-sale.dto';
 import { UpdateSaleDto } from './dto/update-sale.dto';
 import { SalesService } from './sales.service';
 
@@ -23,6 +23,11 @@ export class SalesController {
   @Post()
   create(@Body() dto: CreateSaleDto, @CurrentUser() user: any) {
     return this.salesService.create(dto, user);
+  }
+
+  @Post('retroactive')
+  createRetroactive(@Body() dto: CreateRetroactiveSaleDto, @CurrentUser() user: any) {
+    return this.salesService.createRetroactive(dto, user);
   }
 
   @Post(':id/pay')
