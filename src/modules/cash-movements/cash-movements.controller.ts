@@ -5,11 +5,13 @@ import {
   Param,
   ParseIntPipe,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateCashExpenseDto } from './dto/create-cash-expense.dto';
+import { CashMovementQueryDto } from './dto/cash-movement-query.dto';
 import { ReverseCashMovementDto } from './dto/reverse-cash-movement.dto';
 import { CashMovementsService } from './cash-movements.service';
 
@@ -19,8 +21,8 @@ export class CashMovementsController {
   constructor(private readonly cashMovementsService: CashMovementsService) {}
 
   @Get()
-  findAll(@CurrentUser() user: any) {
-    return this.cashMovementsService.findAll(user);
+  findAll(@CurrentUser() user: any, @Query() query: CashMovementQueryDto) {
+    return this.cashMovementsService.findAll(user, query);
   }
 
   @Get('by-shift/:cashShiftId')

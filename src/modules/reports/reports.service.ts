@@ -1,10 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import {
   CashMovementType,
   InventoryMovementType,
   PaymentMethod,
   SaleItemType,
   SaleStatus,
+  UserRole,
 } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { ReportQueryDto } from './dto/report-query.dto';
@@ -13,13 +14,14 @@ import { ReportQueryDto } from './dto/report-query.dto';
 export class ReportsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async cashSummary(query: ReportQueryDto) {
+  async cashSummary(query: ReportQueryDto, user?: AuthUser) {
     const { start, end } = this.range(query);
     const where = query.cashShiftId
-      ? { id: query.cashShiftId }
+      ? { id: query.cashShiftId, ...this.cashShiftOwnerWhere(user) }
       : {
           openedAt: { gte: start, lte: end },
-          ...(query.userId ? { openedById: query.userId } : {}),
+          ...(user?.role === UserRole.ADMIN && query.userId ? { openedById: query.userId } : {}),
+          ...this.cashShiftOwnerWhere(user),
         };
     const shifts = await this.prisma.cashShift.findMany({
       where,
@@ -133,10 +135,10 @@ export class ReportsService {
     };
   }
 
-  async salesSummary(query: ReportQueryDto) {
+  async salesSummary(query: ReportQueryDto, user?: AuthUser) {
     const { start, end } = this.range(query);
     const sales = await this.prisma.sale.findMany({
-      where: this.saleWhere(query, start, end),
+      where: this.saleWhere(query, start, end, user),
       include: { payments: true, user: { include: { employee: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -169,10 +171,10 @@ export class ReportsService {
     };
   }
 
-  async salesByItemType(query: ReportQueryDto) {
+  async salesByItemType(query: ReportQueryDto, user?: AuthUser) {
     const { start, end } = this.range(query);
     const details = await this.prisma.saleDetail.findMany({
-      where: { sale: this.saleWhere(query, start, end) },
+      where: { sale: this.saleWhere(query, start, end, user) },
       include: { sale: true },
     });
 
@@ -191,12 +193,12 @@ export class ReportsService {
     };
   }
 
-  async productSales(query: ReportQueryDto) {
+  async productSales(query: ReportQueryDto, user?: AuthUser) {
     const { start, end } = this.range(query);
     const details = await this.prisma.saleDetail.findMany({
       where: {
         itemType: SaleItemType.PRODUCT,
-        sale: this.saleWhere(query, start, end),
+        sale: this.saleWhere(query, start, end, user),
       },
       include: { product: true },
     });
@@ -235,12 +237,12 @@ export class ReportsService {
     };
   }
 
-  async productSalesByUser(query: ReportQueryDto) {
+  async productSalesByUser(query: ReportQueryDto, user?: AuthUser) {
     const { start, end } = this.range(query);
     const details = await this.prisma.saleDetail.findMany({
       where: {
         itemType: SaleItemType.PRODUCT,
-        sale: this.saleWhere(query, start, end),
+        sale: this.saleWhere(query, start, end, user),
       },
       include: {
         product: true,
@@ -295,9 +297,9 @@ export class ReportsService {
    * Reporte unificado de ventas e ingresos.
    * Fusiona totales + desglose por tipo de ítem + anulaciones + ingresos por tipo de habitación.
    */
-  async salesFull(query: ReportQueryDto) {
+  async salesFull(query: ReportQueryDto, user?: AuthUser) {
     const { start, end } = this.range(query);
-    const saleWhere = this.saleWhere(query, start, end);
+    const saleWhere = this.saleWhere(query, start, end, user);
 
     const [sales, details, cancelled] = await Promise.all([
       this.prisma.sale.findMany({
@@ -645,15 +647,30 @@ export class ReportsService {
     };
   }
 
-  private saleWhere(query: ReportQueryDto, start: Date, end: Date) {
+  private saleWhere(query: ReportQueryDto, start: Date, end: Date, user?: AuthUser) {
     return {
       createdAt: { gte: start, lte: end },
       ...(query.cashShiftId ? { cashShiftId: query.cashShiftId } : {}),
-      ...(query.userId ? { userId: query.userId } : {}),
+      ...(user?.role === UserRole.ADMIN && query.userId ? { userId: query.userId } : {}),
+      ...this.saleOwnerWhere(user),
       ...(query.status
         ? { status: query.status }
         : { status: { not: SaleStatus.CANCELLED } }),
     };
+  }
+
+  private cashShiftOwnerWhere(user?: AuthUser) {
+    return user?.role === UserRole.ADMIN ? {} : { openedById: this.userId(user) };
+  }
+
+  private saleOwnerWhere(user?: AuthUser) {
+    return user?.role === UserRole.ADMIN ? {} : { userId: this.userId(user) };
+  }
+
+  private userId(user?: AuthUser) {
+    const id = user?.sub ?? user?.id;
+    if (!id) throw new ForbiddenException('Usuario no válido.');
+    return id;
   }
 
   private range(query: ReportQueryDto) {
@@ -742,3 +759,5 @@ export class ReportsService {
     return hour >= 15 || hour < 6 ? 'Turno noche' : 'Turno día';
   }
 }
+
+type AuthUser = { sub?: number; id?: number; role: UserRole };

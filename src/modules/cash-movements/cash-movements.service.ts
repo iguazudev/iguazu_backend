@@ -12,6 +12,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateCashExpenseDto } from './dto/create-cash-expense.dto';
+import { CashMovementQueryDto } from './dto/cash-movement-query.dto';
 import { RecordCashMovementDto } from './dto/record-cash-movement.dto';
 
 const movementInclude = {
@@ -87,19 +88,41 @@ export class CashMovementsService {
     return movement;
   }
 
-  async findAll(user: { sub: number; role: UserRole }) {
+  async findAll(user: AuthUser, query: CashMovementQueryDto = {}) {
+    const cashShiftWhere: any = {};
+    if (user.role !== UserRole.ADMIN) cashShiftWhere.openedById = this.userId(user);
+    if (user.role === UserRole.ADMIN && query.userId) cashShiftWhere.openedById = query.userId;
+    if (query.openedDate) {
+      const start = new Date(`${query.openedDate}T00:00:00`);
+      const end = new Date(`${query.openedDate}T23:59:59.999`);
+      cashShiftWhere.openedAt = { gte: start, lte: end };
+    }
+    if (query.workShift) {
+      const shifts = await this.prisma.cashShift.findMany({
+        where: cashShiftWhere,
+        select: { id: true, openedAt: true },
+        orderBy: { openedAt: 'desc' },
+        take: 500,
+      });
+      cashShiftWhere.id = {
+        in: shifts
+          .filter((shift) => this.workShift(shift.openedAt) === query.workShift)
+          .map((shift) => shift.id),
+      };
+    }
     const movements = await this.prisma.cashMovement.findMany({
-      where:
-        user.role === UserRole.ADMIN
-          ? undefined
-          : { cashShift: { openedById: user.sub } },
+      where: {
+        ...(query.cashShiftId ? { cashShiftId: query.cashShiftId } : {}),
+        ...(Object.keys(cashShiftWhere).length ? { cashShift: cashShiftWhere } : {}),
+      },
       orderBy: { occurredAt: 'desc' },
+      take: query.limit ?? 100,
       include: movementInclude,
     });
     return this.withReferenceSales(movements);
   }
 
-  async findOne(id: number, user: { sub: number; role: UserRole }) {
+  async findOne(id: number, user: AuthUser) {
     const movement = await this.prisma.cashMovement.findUnique({
       where: { id },
       include: movementInclude,
@@ -107,7 +130,7 @@ export class CashMovementsService {
 
     if (
       !movement ||
-      (user.role !== UserRole.ADMIN && movement.cashShift.openedById !== user.sub)
+      (user.role !== UserRole.ADMIN && movement.cashShift.openedById !== this.userId(user))
     ) {
       throw new NotFoundException('Movimiento de caja no encontrado.');
     }
@@ -115,21 +138,26 @@ export class CashMovementsService {
     return (await this.withReferenceSales([movement]))[0];
   }
 
-  async byShift(cashShiftId: number, user: { sub: number; role: UserRole }) {
+  async byShift(cashShiftId: number, user: AuthUser) {
     const movements = await this.prisma.cashMovement.findMany({
       where:
         user.role === UserRole.ADMIN
           ? { cashShiftId }
-          : { cashShiftId, cashShift: { openedById: user.sub } },
+          : { cashShiftId, cashShift: { openedById: this.userId(user) } },
       orderBy: { occurredAt: 'desc' },
       include: movementInclude,
     });
     return this.withReferenceSales(movements);
   }
 
+  private workShift(openedAt: Date) {
+    const hour = openedAt.getHours();
+    return hour >= 15 || hour < 6 ? 'NIGHT' : 'DAY';
+  }
+
   async expense(
     dto: CreateCashExpenseDto,
-    user: { sub: number; role: UserRole; employeeId?: number | null },
+    user: AuthUser & { employeeId?: number | null },
   ) {
     const allowed: CashMovementCategory[] = [
       CashMovementCategory.CASH_WITHDRAWAL,
@@ -144,7 +172,7 @@ export class CashMovementsService {
       const movement = await this.record(
         {
           cashShiftId: dto.cashShiftId,
-          userId: user.sub,
+          userId: this.userId(user),
           actorRole: user.role,
           type: CashMovementType.EXPENSE,
           category: dto.category,
@@ -226,6 +254,12 @@ export class CashMovementsService {
     });
   }
 
+  private userId(user: AuthUser) {
+    const id = user.sub ?? user.id;
+    if (!id) throw new NotFoundException('Movimiento de caja no encontrado.');
+    return id;
+  }
+
   private async withReferenceSales<T extends { referenceType: string | null; referenceId: number | null; salePayment?: any }>(
     movements: T[],
   ) {
@@ -256,3 +290,5 @@ export class CashMovementsService {
     }));
   }
 }
+
+type AuthUser = { sub?: number; id?: number; role: UserRole };

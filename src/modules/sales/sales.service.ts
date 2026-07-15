@@ -224,6 +224,9 @@ export class SalesService {
       include: saleInclude,
     });
     if (!sale) throw new NotFoundException('Venta no encontrada.');
+    if (user.role !== UserRole.ADMIN && sale.userId !== user.sub) {
+      throw new NotFoundException('Venta no encontrada.');
+    }
     if (sale.status !== SaleStatus.OPEN) {
       throw new BadRequestException('El cargo no está pendiente.');
     }
@@ -273,6 +276,9 @@ export class SalesService {
       include: { ...saleInclude, payments: { include: { cashMovement: true } } },
     });
     if (!sale) throw new NotFoundException('Venta no encontrada.');
+    if (user.role !== UserRole.ADMIN && sale.userId !== user.sub) {
+      throw new NotFoundException('Venta no encontrada.');
+    }
     if (sale.status === SaleStatus.CANCELLED) {
       throw new BadRequestException('La venta ya fue anulada.');
     }
@@ -400,6 +406,9 @@ export class SalesService {
     }
     if (user.role !== UserRole.ADMIN && sale.userId !== user.sub) {
       throw new BadRequestException('Solo puedes editar tus ventas.');
+    }
+    if (user.role !== UserRole.ADMIN && (dto.userId !== undefined || dto.cashShiftId !== undefined)) {
+      throw new BadRequestException('Solo ADMIN puede cambiar usuario o caja de una venta.');
     }
     if (
       sale.invoice &&
@@ -742,7 +751,7 @@ export class SalesService {
     });
   }
 
-  async accountByStay(stayId: number) {
+  async accountByStay(stayId: number, user: AuthUser) {
     const stay = await this.prisma.stay.findUnique({
       where: { id: stayId },
       include: {
@@ -758,6 +767,7 @@ export class SalesService {
           },
         },
         sales: {
+          where: user.role === UserRole.ADMIN ? undefined : { userId: user.sub },
           orderBy: { createdAt: 'desc' },
           include: saleInclude,
         },

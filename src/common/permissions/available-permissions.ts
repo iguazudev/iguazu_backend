@@ -13,6 +13,8 @@ export const AVAILABLE_PERMISSIONS = [
   'POST /cash-closures/:id/reopen',
   'PATCH /cash-closures/:id/counts',
   'POST /cash-closures/:id/settle',
+  'POST /cash-closures/:id/sale-edits/:auditLogId/penalty',
+  'POST /cash-closures/:id/sale-edits/:auditLogId/loss',
   'GET /cash-movements',
   'GET /cash-movements/by-shift/:cashShiftId',
   'GET /cash-movements/:id',

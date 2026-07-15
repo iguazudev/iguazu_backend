@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { CashShiftStatus, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { CashShiftQueryDto } from './dto/cash-shift-query.dto';
 import { OpenCashShiftDto } from './dto/create-cash-shift.dto';
 
 @Injectable()
@@ -29,11 +30,11 @@ export class CashShiftService {
     });
   }
 
-  async getOpenShifts(user: { sub: number; role: UserRole }) {
+  async getOpenShifts(user: AuthUser) {
     return this.prisma.cashShift.findMany({
       where: {
         status: CashShiftStatus.OPEN,
-        ...(user.role === UserRole.ADMIN ? {} : { openedById: user.sub }),
+        ...this.ownerWhere(user),
       },
       orderBy: { openedAt: 'desc' },
       include: {
@@ -106,11 +107,22 @@ export class CashShiftService {
     );
   }
 
-  async history() {
-    return this.prisma.cashShift.findMany({
+  async history(query: CashShiftQueryDto = {}, user?: AuthUser) {
+    const where = query.openedDate
+      ? {
+          openedAt: {
+            gte: new Date(`${query.openedDate}T00:00:00-05:00`),
+            lte: new Date(`${query.openedDate}T23:59:59.999-05:00`),
+          },
+          ...this.ownerWhere(user),
+        }
+      : this.ownerWhere(user);
+    const shifts = await this.prisma.cashShift.findMany({
+      where,
       orderBy: {
         openedAt: 'desc',
       },
+      take: query.openedDate ? undefined : 100,
       include: {
         openedBy: {
           include: {
@@ -124,9 +136,12 @@ export class CashShiftService {
         },
       },
     });
+    return query.openedDate
+      ? shifts.filter((shift) => this.peruDateKey(shift.openedAt) === query.openedDate)
+      : shifts;
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, user?: AuthUser) {
     const cashShift = await this.prisma.cashShift.findUnique({
       where: {
         id,
@@ -147,14 +162,37 @@ export class CashShiftService {
       },
     });
 
-    if (!cashShift) {
+    if (!cashShift || (user?.role !== UserRole.ADMIN && cashShift.openedById !== this.userId(user))) {
       throw new NotFoundException('Caja no encontrada.');
     }
 
     return cashShift;
   }
 
+  private ownerWhere(user?: AuthUser) {
+    return user?.role === UserRole.ADMIN ? {} : { openedById: this.userId(user) };
+  }
+
+  private userId(user?: AuthUser) {
+    const id = user?.sub ?? user?.id;
+    if (!id) throw new NotFoundException('Caja no encontrada.');
+    return id;
+  }
+
   private dateOnly(value: Date) {
     return new Date(value.getFullYear(), value.getMonth(), value.getDate());
   }
+
+  private peruDateKey(value: Date) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Lima',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(value);
+    const part = (type: string) => parts.find((item) => item.type === type)?.value ?? '';
+    return `${part('year')}-${part('month')}-${part('day')}`;
+  }
 }
+
+type AuthUser = { sub?: number; id?: number; role: UserRole };

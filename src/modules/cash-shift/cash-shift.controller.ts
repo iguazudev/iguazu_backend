@@ -5,11 +5,13 @@ import {
   Param,
   ParseIntPipe,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CashShiftService } from './cash-shift.service';
+import { CashShiftQueryDto } from './dto/cash-shift-query.dto';
 import { OpenCashShiftDto } from './dto/create-cash-shift.dto';
 
 @UseGuards(JwtAuthGuard)
@@ -38,12 +40,12 @@ export class CashShiftController {
   }
 
   @Get('history')
-  history() {
-    return this.cashShiftService.history();
+  history(@Query() query: CashShiftQueryDto, @CurrentUser() user: any) {
+    return this.cashShiftService.history(query, user);
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.cashShiftService.findOne(id);
+  findOne(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: any) {
+    return this.cashShiftService.findOne(id, user);
   }
 }

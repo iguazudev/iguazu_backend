@@ -82,8 +82,8 @@ export class SalesController {
   }
 
   @Get('account/by-stay/:stayId')
-  accountByStay(@Param('stayId', ParseIntPipe) stayId: number) {
-    return this.salesService.accountByStay(stayId);
+  accountByStay(@Param('stayId', ParseIntPipe) stayId: number, @CurrentUser() user: any) {
+    return this.salesService.accountByStay(stayId, user);
   }
 
   @Get(':id')

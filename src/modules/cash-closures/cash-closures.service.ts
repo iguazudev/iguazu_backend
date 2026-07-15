@@ -10,11 +10,13 @@ import {
   CashShiftStatus,
   InventoryMovementType,
   PaymentMethod,
+  PenaltyStatus,
   SaleStatus,
   UserRole,
 } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CloseCashShiftDto } from './dto/close-cash-shift.dto';
+import { CashClosureQueryDto } from './dto/cash-closure-query.dto';
 import { CorrectCashClosureDto } from './dto/correct-cash-closure.dto';
 import { SettleDifferenceDto } from './dto/settle-difference.dto';
 
@@ -123,27 +125,54 @@ export class CashClosuresService {
       return closure;
     });
 
-    return this.findOne(closure.id);
+    return this.findOne(closure.id, { sub: userId, role: UserRole.CASHIER });
   }
 
-  async findAll() {
+  async findAll(query: CashClosureQueryDto = {}, user?: AuthUser) {
+    const cashShiftWhere = query.openedDate
+      ? {
+          openedAt: {
+            gte: new Date(`${query.openedDate}T00:00:00-05:00`),
+            lte: new Date(`${query.openedDate}T23:59:59.999-05:00`),
+          },
+          ...this.ownerWhere(user),
+        }
+      : this.ownerWhere(user);
     const closures = await this.prisma.cashClosure.findMany({
+      where: Object.keys(cashShiftWhere).length ? { cashShift: cashShiftWhere } : {},
       orderBy: { createdAt: 'desc' },
+      take: query.openedDate ? undefined : 100,
       include: { cashShift: { include: this.shiftInclude() }, details: true },
     });
 
+    const filtered = query.openedDate
+      ? closures.filter((closure) => this.peruDateKey(closure.cashShift.openedAt) === query.openedDate)
+      : closures;
+
     return Promise.all(
-      closures.map((closure) => this.closureWithCurrentExpected(closure)),
+      filtered.map((closure) => this.closureWithCurrentExpected(closure)),
     );
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, user?: AuthUser) {
     const closure = await this.prisma.cashClosure.findUnique({
       where: { id },
       include: { cashShift: { include: this.shiftInclude() }, details: true },
     });
-    if (!closure) throw new NotFoundException('Cierre de caja no encontrado.');
+    if (!closure || (user?.role !== UserRole.ADMIN && closure.cashShift.openedById !== this.userId(user))) {
+      throw new NotFoundException('Cierre de caja no encontrado.');
+    }
     return this.closureWithCurrentExpected(closure);
+  }
+
+  private ownerWhere(user?: AuthUser) {
+    return user?.role === UserRole.ADMIN ? {} : { openedById: this.userId(user) };
+  }
+
+  private userId(user?: AuthUser) {
+    const id = user?.sub ?? user?.id;
+    if (!id) throw new NotFoundException('Cierre de caja no encontrado.');
+    return id;
   }
 
   private shiftInclude() {
@@ -224,6 +253,31 @@ export class CashClosuresService {
 
   private async closureWithCurrentExpected(closure: any) {
     const summary = await this.shiftSummary(closure.cashShift);
+    const saleIds = (closure.cashShift.sales ?? []).map((sale: any) => sale.id);
+    const saleEditsAfterClose = saleIds.length
+      ? await this.prisma.auditLog.findMany({
+          where: {
+            entity: 'Sale',
+            action: 'UPDATE',
+            entityId: { in: saleIds },
+            createdAt: { gt: closure.createdAt },
+          },
+          include: { user: { include: { employee: true } } },
+          orderBy: { createdAt: 'desc' },
+          take: 50,
+        })
+      : [];
+    const editReviewLogs = saleEditsAfterClose.length
+      ? await this.prisma.auditLog.findMany({
+          where: {
+            entity: 'AuditLog',
+            entityId: { in: saleEditsAfterClose.map((log) => log.id) },
+            action: { in: ['SALE_EDIT_PENALTY', 'SALE_EDIT_ACCEPTED', 'SALE_EDIT_LOSS'] },
+          },
+          orderBy: { createdAt: 'desc' },
+        })
+      : [];
+    const reviewByEditId = new Map(editReviewLogs.map((log) => [log.entityId, log]));
     const details = (closure.details ?? []).map((detail: any) => {
       const expectedAmount = Number(
         summary.expectedByMethod?.[detail.paymentMethod] ?? detail.expectedAmount ?? 0,
@@ -245,6 +299,21 @@ export class CashClosuresService {
       totalCounted,
       difference: Number((totalCounted - totalExpected).toFixed(2)),
       summary: { ...summary, totalExpected },
+      saleEditsAfterClose: saleEditsAfterClose.map((log) => ({
+        id: log.id,
+        saleId: log.entityId,
+        createdAt: log.createdAt,
+        user: log.user?.employee?.fullName ?? log.user?.username ?? 'Sistema',
+        oldData: log.oldData,
+        newData: log.newData,
+        review: reviewByEditId.get(log.id)
+          ? {
+              action: reviewByEditId.get(log.id)?.action,
+              createdAt: reviewByEditId.get(log.id)?.createdAt,
+              data: reviewByEditId.get(log.id)?.newData,
+            }
+          : null,
+      })),
     };
   }
 
@@ -432,7 +501,7 @@ export class CashClosuresService {
       });
     });
 
-    return this.findOne(closureId);
+    return this.findOne(closureId, user);
   }
 
   /**
@@ -536,4 +605,116 @@ export class CashClosuresService {
       };
     });
   }
+
+  async penalizeSaleEdit(
+    closureId: number,
+    auditLogId: number,
+    user: { sub: number; role: UserRole },
+  ) {
+    const { log, amount } = await this.saleEditReviewData(closureId, auditLogId, user);
+    const employeeId = log.user?.employeeId;
+    if (!employeeId) {
+      throw new BadRequestException('El usuario que editó no está asociado a un empleado.');
+    }
+    if (amount <= 0) {
+      throw new BadRequestException('La edición no redujo el total de la venta.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const penalty = await tx.penalty.create({
+        data: {
+          employeeId,
+          amount,
+          reason: `Edición no aprobada venta #${log.entityId}: ${this.saleEditReason(log)}`,
+          date: new Date(),
+          status: PenaltyStatus.PENDING,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.sub,
+          action: 'SALE_EDIT_PENALTY',
+          entity: 'AuditLog',
+          entityId: auditLogId,
+          newData: { closureId, saleId: log.entityId, amount, penaltyId: penalty.id },
+        },
+      });
+      return penalty;
+    });
+  }
+
+  async acceptSaleEdit(
+    closureId: number,
+    auditLogId: number,
+    user: { sub: number; role: UserRole },
+  ) {
+    const { log, amount } = await this.saleEditReviewData(closureId, auditLogId, user);
+    return this.prisma.auditLog.create({
+      data: {
+        userId: user.sub,
+        action: 'SALE_EDIT_ACCEPTED',
+        entity: 'AuditLog',
+        entityId: auditLogId,
+        newData: { closureId, saleId: log.entityId, amount, reason: this.saleEditReason(log) },
+      },
+    });
+  }
+
+  private async saleEditReviewData(
+    closureId: number,
+    auditLogId: number,
+    user: { role: UserRole },
+  ) {
+    if (user.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Solo ADMIN puede revisar ediciones post cierre.');
+    }
+    const closure = await this.prisma.cashClosure.findUnique({
+      where: { id: closureId },
+      include: { cashShift: { include: { sales: { select: { id: true } } } } },
+    });
+    if (!closure) throw new NotFoundException('Cierre de caja no encontrado.');
+    const saleIds = closure.cashShift.sales.map((sale) => sale.id);
+    const log = await this.prisma.auditLog.findUnique({
+      where: { id: auditLogId },
+      include: { user: true },
+    });
+    if (
+      !log ||
+      log.entity !== 'Sale' ||
+      log.action !== 'UPDATE' ||
+      !saleIds.includes(log.entityId) ||
+      log.createdAt <= closure.createdAt
+    ) {
+      throw new NotFoundException('Edición post cierre no encontrada.');
+    }
+    const resolved = await this.prisma.auditLog.findFirst({
+      where: {
+        entity: 'AuditLog',
+        entityId: auditLogId,
+        action: { in: ['SALE_EDIT_PENALTY', 'SALE_EDIT_ACCEPTED', 'SALE_EDIT_LOSS'] },
+      },
+    });
+    if (resolved) throw new BadRequestException('Esta edición ya fue revisada.');
+
+    const oldTotal = Number((log.oldData as any)?.total ?? 0);
+    const newTotal = Number((log.newData as any)?.total ?? 0);
+    return { log, amount: Number(Math.max(0, oldTotal - newTotal).toFixed(2)) };
+  }
+
+  private saleEditReason(log: { oldData: unknown; newData: unknown }) {
+    return String((log.newData as any)?.reason ?? (log.oldData as any)?.reason ?? 'sin motivo');
+  }
+
+  private peruDateKey(value: Date) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Lima',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(value);
+    const part = (type: string) => parts.find((item) => item.type === type)?.value ?? '';
+    return `${part('year')}-${part('month')}-${part('day')}`;
+  }
 }
+
+type AuthUser = { sub?: number; id?: number; role: UserRole };

@@ -6,12 +6,14 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CashClosuresService } from './cash-closures.service';
 import { CloseCashShiftDto } from './dto/close-cash-shift.dto';
+import { CashClosureQueryDto } from './dto/cash-closure-query.dto';
 import { CorrectCashClosureDto } from './dto/correct-cash-closure.dto';
 import { SettleDifferenceDto } from './dto/settle-difference.dto';
 
@@ -31,13 +33,13 @@ export class CashClosuresController {
   }
 
   @Get()
-  findAll() {
-    return this.cashClosuresService.findAll();
+  findAll(@Query() query: CashClosureQueryDto, @CurrentUser() user: any) {
+    return this.cashClosuresService.findAll(query, user);
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.cashClosuresService.findOne(id);
+  findOne(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: any) {
+    return this.cashClosuresService.findOne(id, user);
   }
 
   @Post(':id/reopen')
@@ -64,5 +66,23 @@ export class CashClosuresController {
     @CurrentUser() user: any,
   ) {
     return this.cashClosuresService.settleDifference(id, dto, user);
+  }
+
+  @Post(':id/sale-edits/:auditLogId/penalty')
+  penalizeSaleEdit(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('auditLogId', ParseIntPipe) auditLogId: number,
+    @CurrentUser() user: any,
+  ) {
+    return this.cashClosuresService.penalizeSaleEdit(id, auditLogId, user);
+  }
+
+  @Post(':id/sale-edits/:auditLogId/loss')
+  acceptSaleEditLoss(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('auditLogId', ParseIntPipe) auditLogId: number,
+    @CurrentUser() user: any,
+  ) {
+    return this.cashClosuresService.acceptSaleEdit(id, auditLogId, user);
   }
 }
