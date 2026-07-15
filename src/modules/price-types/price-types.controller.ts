@@ -6,6 +6,7 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -24,8 +25,8 @@ export class PriceTypesController {
   }
 
   @Get()
-  findAll() {
-    return this.priceTypesService.findAll();
+  findAll(@Query('includeInactive') includeInactive?: string) {
+    return this.priceTypesService.findAll(includeInactive === 'true');
   }
 
   @Get(':id')

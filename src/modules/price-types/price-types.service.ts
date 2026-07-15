@@ -24,11 +24,9 @@ export class PriceTypesService {
     });
   }
 
-  async findAll() {
+  async findAll(includeInactive = false) {
     return this.prisma.priceType.findMany({
-      where: {
-        active: true,
-      },
+      where: includeInactive ? undefined : { active: true },
       orderBy: {
         name: 'asc',
       },

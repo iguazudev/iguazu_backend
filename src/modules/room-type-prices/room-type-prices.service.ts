@@ -27,11 +27,9 @@ export class RoomTypePricesService {
     });
   }
 
-  async findAll() {
+  async findAll(includeInactive = false) {
     return this.prisma.roomTypePrice.findMany({
-      where: {
-        active: true,
-      },
+      where: includeInactive ? undefined : { active: true },
       include: roomTypePriceInclude,
       orderBy: [
         {

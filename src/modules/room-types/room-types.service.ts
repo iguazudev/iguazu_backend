@@ -38,11 +38,9 @@ export class RoomTypesService {
     });
   }
 
-  async findAll() {
+  async findAll(includeInactive = false) {
     return this.prisma.roomType.findMany({
-      where: {
-        active: true,
-      },
+      where: includeInactive ? undefined : { active: true },
       include: roomTypeInclude,
       orderBy: {
         name: 'asc',
