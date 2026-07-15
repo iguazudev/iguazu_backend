@@ -23,7 +23,7 @@ export class UpdateSaleDetailDto {
 
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0.01)
+  @Min(0)
   @IsOptional()
   quantity?: number;
 

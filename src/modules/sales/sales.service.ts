@@ -38,14 +38,6 @@ export class SalesService {
   async create(dto: CreateSaleDto, user: AuthUser) {
     if (!dto.details?.length)
       throw new BadRequestException('La venta requiere detalles.');
-    const payments = dto.payments ?? [];
-    const isCharge = payments.length === 0;
-    if (isCharge && !dto.stayId) {
-      throw new BadRequestException(
-        'Para dejar un cargo pendiente selecciona una estadía.',
-      );
-    }
-
     const openShift = await this.openShiftFor(user, dto.cashShiftId);
     const stay = dto.stayId
       ? await this.prisma.stay.findFirst({
@@ -63,6 +55,14 @@ export class SalesService {
       };
     });
     const total = this.sum(details.map((detail) => detail.subtotal));
+    const payments = dto.payments ?? [];
+    const isFreeSale = total === 0 && payments.length === 0;
+    const isCharge = payments.length === 0 && !isFreeSale;
+    if (isCharge && !dto.stayId) {
+      throw new BadRequestException(
+        'Para dejar un cargo pendiente selecciona una estadía.',
+      );
+    }
     const paid = this.sum(payments.map((payment) => payment.amount));
     if (!isCharge && total !== paid)
       throw new BadRequestException('El total y los pagos no coinciden.');
@@ -126,12 +126,14 @@ export class SalesService {
 
       // Fase 2: aplicar los descuentos de stock (central y bandeja de habitación).
       for (const { product, quantity, roomProduct } of productChecks) {
-        await tx.product.update({
-          where: { id: product.id },
-          data: { stock: { decrement: quantity } },
-        });
+        if (quantity > 0) {
+          await tx.product.update({
+            where: { id: product.id },
+            data: { stock: { decrement: quantity } },
+          });
+        }
 
-        if (roomProduct) {
+        if (roomProduct && quantity > 0) {
           if (roomProduct.quantity === quantity) {
             await tx.roomProduct.delete({ where: { id: roomProduct.id } });
           } else {
@@ -168,7 +170,7 @@ export class SalesService {
       });
 
       for (const detail of details.filter(
-        (item) => item.itemType === SaleItemType.PRODUCT,
+        (item) => item.itemType === SaleItemType.PRODUCT && Number(item.quantity) > 0,
       )) {
         await tx.inventoryMovement.create({
           data: {
@@ -183,7 +185,7 @@ export class SalesService {
         });
       }
 
-      for (const payment of payments) {
+      for (const payment of payments.filter((item) => item.amount > 0)) {
         const movement = await tx.cashMovement.create({
           data: {
             cashShiftId: openShift.id,
@@ -231,7 +233,7 @@ export class SalesService {
     const openShift = await this.openShiftFor(user, dto.cashShiftId);
 
     return this.prisma.$transaction(async (tx) => {
-      for (const payment of dto.payments) {
+      for (const payment of dto.payments.filter((item) => item.amount > 0)) {
         const movement = await tx.cashMovement.create({
           data: {
             cashShiftId: openShift.id,
@@ -915,9 +917,9 @@ export class SalesService {
     }
 
     const amount = Number((Number(payment.amount) + delta).toFixed(2));
-    if (amount <= 0) {
+    if (amount < 0) {
       throw new BadRequestException(
-        'El nuevo total no puede dejar un pago en cero o negativo. Anula la venta.',
+        'El nuevo total no puede dejar un pago negativo. Anula la venta.',
       );
     }
 

@@ -37,7 +37,7 @@ export class CreateSaleDetailDto {
 
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0.01)
+  @Min(0)
   quantity!: number;
 
   @Type(() => Number)
@@ -52,7 +52,7 @@ export class CreateSalePaymentDto {
 
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0.01)
+  @Min(0)
   amount!: number;
 }
 
