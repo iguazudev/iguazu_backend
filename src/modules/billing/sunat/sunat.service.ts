@@ -79,7 +79,11 @@ export class SunatService {
     const emisor = this.config.emisor;
     const authorizationDecoded = `${emisor.usuario_emisor}:${emisor.clave_emisor}`;
     const authorizationBase64 = Buffer.from(authorizationDecoded).toString('base64');
-    const headers = { 'Content-Type': 'text/xml', Authorization: `Basic ${authorizationBase64}` };
+    const headers = {
+      'Content-Type': 'text/xml; charset=utf-8',
+      SOAPAction: 'urn:sendBill',
+      Authorization: `Basic ${authorizationBase64}`,
+    };
     const makeDebug = (input: {
       soapResponse?: string;
       httpStatus?: number;
