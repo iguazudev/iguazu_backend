@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import axios from 'axios';
+import { createHash } from 'node:crypto';
 import { XMLParser } from 'fast-xml-parser';
 import { BillingConfig } from '../billing.config';
 
@@ -18,6 +19,8 @@ export interface SunatFaultError {
   faultstring: string;
   message: string;
 }
+
+type SunatDebug = Record<string, unknown>;
 
 function parseSoapBody(xmlLike: string): any | null {
   if (!xmlLike || typeof xmlLike !== 'string') return null;
@@ -74,9 +77,35 @@ export class SunatService {
 
     const soapBody = buildSoapEnvelope(nombreZip, zipBase64);
     const emisor = this.config.emisor;
-    const auth =
-      'Basic ' +
-      Buffer.from(`${emisor.usuario_emisor}:${emisor.clave_emisor}`).toString('base64');
+    const authorizationDecoded = `${emisor.usuario_emisor}:${emisor.clave_emisor}`;
+    const authorizationBase64 = Buffer.from(authorizationDecoded).toString('base64');
+    const headers = { 'Content-Type': 'text/xml', Authorization: `Basic ${authorizationBase64}` };
+    const makeDebug = (input: {
+      soapResponse?: string;
+      httpStatus?: number;
+      httpStatusText?: string;
+      sunatFault?: unknown;
+    } = {}): SunatDebug => {
+      const zip = Buffer.from(zipBase64, 'base64');
+      return {
+        endpoint: this.config.endpoint,
+        usuarioConfigurado: emisor.usuario_emisor,
+        passwordLength: emisor.clave_emisor.length,
+        authorizationBase64,
+        authorizationDecoded,
+        nombreZip,
+        soapRequest: soapBody,
+        soapResponse: input.soapResponse,
+        httpStatus: input.httpStatus,
+        httpStatusText: input.httpStatusText,
+        headersEnviados: headers,
+        xmlFileName: `${nombreZip}.xml`,
+        zipFileName: `${nombreZip}.zip`,
+        zipSizeBytes: zip.length,
+        zipSha256: createHash('sha256').update(zip).digest('hex'),
+        sunatFault: input.sunatFault,
+      };
+    };
 
     let data: string;
     let status: number;
@@ -87,7 +116,7 @@ export class SunatService {
         this.config.endpoint,
         soapBody,
         {
-          headers: { 'Content-Type': 'text/xml', Authorization: auth },
+          headers,
           validateStatus: () => true,
         },
       ));
@@ -101,28 +130,47 @@ export class SunatService {
         const f = buildFaultError(parsedBody, err?.response?.status, err?.response?.statusText);
         const e = new Error(f.message);
         (e as any).sunatFault = f;
+        (e as any).sunatDebug = makeDebug({
+          soapResponse: responseData,
+          httpStatus: err?.response?.status,
+          httpStatusText: err?.response?.statusText,
+          sunatFault: f,
+        });
         throw e;
       }
-      throw new Error(`No se pudo enviar a SUNAT: ${err.message}`);
+      const e = new Error(`No se pudo enviar a SUNAT: ${err.message}`);
+      (e as any).sunatDebug = makeDebug({
+        soapResponse: responseData,
+        httpStatus: err?.response?.status,
+        httpStatusText: err?.response?.statusText,
+      });
+      throw e;
     }
 
     const body = parseSoapBody(typeof data === 'string' ? data : String(data ?? ''));
     if (!body) {
-      throw new Error(`Respuesta de SUNAT invalida (HTTP ${status})`);
+      const e = new Error(`Respuesta de SUNAT invalida (HTTP ${status})`);
+      (e as any).sunatDebug = makeDebug({ soapResponse: data, httpStatus: status, httpStatusText: statusText });
+      throw e;
     }
     if (body.Fault) {
       const f = buildFaultError(body, status, statusText);
       const e = new Error(f.message);
       (e as any).sunatFault = f;
+      (e as any).sunatDebug = makeDebug({ soapResponse: data, httpStatus: status, httpStatusText: statusText, sunatFault: f });
       throw e;
     }
     if (Number(status) >= 400) {
-      throw new Error(`SUNAT devolvio HTTP ${status} ${statusText}`);
+      const e = new Error(`SUNAT devolvio HTTP ${status} ${statusText}`);
+      (e as any).sunatDebug = makeDebug({ soapResponse: data, httpStatus: status, httpStatusText: statusText });
+      throw e;
     }
 
     const cdrBase64 = body.sendBillResponse?.applicationResponse;
     if (!cdrBase64) {
-      throw new Error('SUNAT no devolvio el CDR esperado');
+      const e = new Error('SUNAT no devolvio el CDR esperado');
+      (e as any).sunatDebug = makeDebug({ soapResponse: data, httpStatus: status, httpStatusText: statusText });
+      throw e;
     }
     return { cdrBase64 };
   }

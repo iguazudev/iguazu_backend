@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InvoiceStatus } from '@prisma/client';
+import { createHash } from 'node:crypto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { BillingConfig } from './billing.config';
 import { InvoicesService } from './invoices.service';
@@ -53,21 +54,6 @@ export class BillingService {
     if (sale.status !== 'PAID') {
       throw new BadRequestException('Solo se puede facturar una venta pagada.');
     }
-    if (sale.invoice) {
-      // Solo se puede reemitir si el comprobante anterior fue RECHAZADO por SUNAT.
-      // ACEPTADO u OBSERVADO quedan como válidos (no se pueden pisar).
-      if (sale.invoice.status !== InvoiceStatus.REJECTED) {
-        throw new BadRequestException(
-          `Esta venta ya tiene un comprobante ${sale.invoice.status === InvoiceStatus.ACCEPTED ? 'aceptado' : 'emitido'} (${sale.invoice.docNumber}).`,
-        );
-      }
-      // Desvincular el comprobante rechazado de la venta para poder emitir uno nuevo.
-      // El registro rechazado se conserva en la tabla Invoice para trazabilidad.
-      await this.prisma.invoice.update({
-        where: { id: sale.invoice.id },
-        data: { sale: { disconnect: true } },
-      });
-    }
 
     // Cliente: si la venta no tiene customer, no se puede emitir (SUNAT exige receptor).
     if (!sale.customer) {
@@ -88,10 +74,22 @@ export class BillingService {
       );
     }
 
-    const serie = defaultSerieForType(invoiceType);
-    const correlativo = await this.invoices.nextCorrelativo(serie);
-    const correlativoPadded = String(correlativo).padStart(8, '0');
-    const docNumber = `${serie}-${correlativoPadded}`;
+    const retryInvoice =
+      sale.invoice?.status === InvoiceStatus.REJECTED ? sale.invoice : null;
+    if (sale.invoice && !retryInvoice) {
+      throw new BadRequestException(
+        `Esta venta ya tiene un comprobante ${sale.invoice.status === InvoiceStatus.ACCEPTED ? 'aceptado' : 'emitido'} (${sale.invoice.docNumber}).`,
+      );
+    }
+    if (retryInvoice && retryInvoice.invoiceType !== invoiceType) {
+      throw new BadRequestException(
+        `Esta venta ya tiene un comprobante rechazado ${retryInvoice.docNumber}. Reintenta con el mismo tipo de comprobante.`,
+      );
+    }
+
+    const serie = retryInvoice?.serie ?? defaultSerieForType(invoiceType);
+    const correlativo = retryInvoice?.correlativo ?? await this.invoices.nextCorrelativo(serie);
+    const docNumber = retryInvoice?.docNumber ?? `${serie}-${String(correlativo).padStart(8, '0')}`;
     const nombreZip = `${this.config.ruc}-${invoiceType}-${docNumber}`;
 
     // Calcular IGV (precios incluyen IGV: base = total / 1.18).
@@ -117,8 +115,7 @@ export class BillingService {
     const result = await this.processSunat(nombreZip, data, invoiceType);
 
     // Persistir Invoice.
-    const invoice = await this.invoices.create({
-      sale: { connect: { id: saleId } },
+    const invoiceData = {
       invoiceType,
       serie,
       correlativo,
@@ -138,7 +135,16 @@ export class BillingService {
       signedXml: result.signedXml ?? null,
       hash: result.hash ?? null,
       emittedBy: { connect: { id: userId } },
-    });
+    };
+    const invoice = retryInvoice
+      ? await this.invoices.update(retryInvoice.id, {
+          ...invoiceData,
+          issueDate: new Date(),
+        })
+      : await this.invoices.create({
+          sale: { connect: { id: saleId } },
+          ...invoiceData,
+        });
 
     // Generar PDF (solo si fue aceptado u observado).
     let pdfBase64: string | null = null;
@@ -179,6 +185,7 @@ export class BillingService {
       sunatDescription: result.sunatDescription,
       pdfBase64,
       sunatRequest: this.safeSunatRequest(nombreZip, data),
+      sunatDebug: result.sunatDebug,
     };
   }
 
@@ -265,6 +272,7 @@ export class BillingService {
       sunatCode: result.sunatCode,
       sunatDescription: result.sunatDescription,
       affectedInvoice: original.docNumber,
+      sunatDebug: result.sunatDebug,
     };
   }
 
@@ -295,20 +303,23 @@ export class BillingService {
       ? this.xmlBuilder.buildCreditNote(data)
       : this.xmlBuilder.buildInvoice(data);
 
-    // 2. Firmar.
-    const signedXml = await this.signer.sign(xml);
-
-    // 3. ZIP.
-    const zipBase64 = this.zip.makeZipBase64(nombreZip, signedXml);
-
-    // 4. Enviar a SUNAT.
+    let signedXml = '';
+    let zipBase64 = '';
     let sunatCode: string | undefined;
     let sunatDescription: string | undefined;
     let cdrXml: string | undefined;
     let hash: string | undefined;
+    let sunatDebug: Record<string, unknown> | undefined;
     let status: InvoiceStatus = InvoiceStatus.PENDING;
 
     try {
+      // 2. Firmar.
+      signedXml = await this.signer.sign(xml);
+
+      // 3. ZIP.
+      zipBase64 = this.zip.makeZipBase64(nombreZip, signedXml);
+
+      // 4. Enviar a SUNAT.
       const { cdrBase64 } = await this.sunat.sendBill(zipBase64, nombreZip);
       const cdr = this.unzip.unzip(cdrBase64);
       cdrXml = cdr.xmlContent;
@@ -335,10 +346,22 @@ export class BillingService {
       sunatCode = fault?.sunatCode;
       sunatDescription = fault?.faultstring ?? err.message;
       status = InvoiceStatus.REJECTED;
+      const zip = zipBase64 ? Buffer.from(zipBase64, 'base64') : undefined;
+      sunatDebug = {
+        ...(err?.sunatDebug ?? {}),
+        xmlFileName: `${nombreZip}.xml`,
+        zipFileName: `${nombreZip}.zip`,
+        xmlSizeBytes: Buffer.byteLength(signedXml || xml, 'utf8'),
+        zipSizeBytes: zip?.length,
+        xmlSha256: createHash('sha256').update(signedXml || xml, 'utf8').digest('hex'),
+        zipSha256: zip ? createHash('sha256').update(zip).digest('hex') : undefined,
+        sunatFault: fault ?? err?.sunatDebug?.sunatFault,
+        exceptionStack: err?.stack,
+      };
       // Persistimos igual con el signedXml para trazabilidad.
     }
 
-    return { signedXml, sunatCode, sunatDescription, cdrXml, hash, status };
+    return { signedXml, sunatCode, sunatDescription, cdrXml, hash, status, sunatDebug };
   }
 
   // ============================================================
