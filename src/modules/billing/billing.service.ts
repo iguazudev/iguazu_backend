@@ -178,12 +178,15 @@ export class BillingService {
 
     return {
       id: invoice.id,
+      saleId,
       docNumber,
       invoiceType,
       status: result.status,
       sunatCode: result.sunatCode,
       sunatDescription: result.sunatDescription,
       pdfBase64,
+      reusedRejectedInvoice: Boolean(retryInvoice),
+      retryInvoiceId: retryInvoice?.id ?? null,
       sunatRequest: this.safeSunatRequest(nombreZip, data),
       sunatDebug: result.sunatDebug,
     };
