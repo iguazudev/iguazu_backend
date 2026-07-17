@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InvoiceStatus } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { BillingConfig } from './billing.config';
@@ -22,21 +22,31 @@ export interface SendSummaryResult {
   summaryError: string | null;
 }
 
+export interface ProcessPendingResult {
+  /** Cuántos tickets distintos se consultaron. */
+  processedTickets: number;
+  /** Cuántas boletas pasaron a estado final (ACCEPTED/REJECTED/OBSERVED). */
+  resolvedInvoices: number;
+  /** Cuántas boletas siguen en proceso en SUNAT ('98'). */
+  stillPending: number;
+}
+
 /**
  * Orquesta el Resumen Diario de Boletas:
  *  - sendDailySummary(): agrupa boletas PENDING, arma el XML, firma, zip, sendSummary.
  *  - processPendingTickets(): consulta tickets '98' con getStatus y actualiza las boletas.
  *
+ * NO hay polling automático: el procesamiento se dispara bajo demanda desde el
+ * botón "Actualizar estado SUNAT" del frontend (o el endpoint process-pending).
+ * Esto evita consumo innecesario de recursos en background.
+ *
  * La numeración del resumen (RC) se guarda en InvoiceCounter serie 'RC'.
  */
 @Injectable()
-export class SummaryProcessorService implements OnModuleInit {
+export class SummaryProcessorService {
   private readonly logger = new Logger(SummaryProcessorService.name);
   /** Máximo de líneas por bloque (manual RS 097-2012, sec. 1.2.c). */
   private static readonly MAX_LINES_PER_BLOCK = 500;
-  /** Intervalo de polling de tickets (ms). Por defecto 3 minutos. */
-  private readonly pollIntervalMs: number;
-  private pollTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -47,25 +57,7 @@ export class SummaryProcessorService implements OnModuleInit {
     private readonly zip: ZipService,
     private readonly sunat: SunatService,
     private readonly unzip: UnzipCdrService,
-  ) {
-    this.pollIntervalMs = this.config.summaryPollMs;
-  }
-
-  /** Arranca el polling automático de tickets al inicializar el módulo. */
-  onModuleInit() {
-    if (this.pollTimer) return;
-    this.logger.log(
-      `Polling de tickets del Resumen Diario activado (cada ${Math.round(this.pollIntervalMs / 1000)}s).`,
-    );
-    // Primera pasada sin espera para resolver boletas pendientes de arranque.
-    this.pollTimer = setInterval(() => {
-      this.processPendingTickets().catch((err) =>
-        this.logger.error(`Error en polling de tickets: ${err?.message ?? err}`),
-      );
-    }, this.pollIntervalMs);
-    // No mantener vivo el process solo por este timer (evita bloquear el shutdown).
-    this.pollTimer.unref?.();
-  }
+  ) {}
 
   /**
    * Agrupa todas las boletas PENDING (sin ticket aún) y envía el Resumen Diario.
@@ -139,7 +131,9 @@ export class SummaryProcessorService implements OnModuleInit {
     // Enviar a SUNAT.
     try {
       const { ticket } = await this.sunat.sendSummary(zipBase64, nombreZip);
-      this.logger.log(`Resumen ${nombreZip} enviado. Ticket: ${ticket}. Boletas: ${block.length}.`);
+      this.logger.log(
+        `[ENVÍO] ${new Date().toISOString()} — Resumen ${nombreZip} enviado a SUNAT. Ticket: ${ticket}. Boletas incluidas: ${block.length}.`,
+      );
 
       // Marcar las boletas con el ticket (siguen PENDING hasta que getStatus las resuelva).
       await this.prisma.invoice.updateMany({
@@ -181,8 +175,13 @@ export class SummaryProcessorService implements OnModuleInit {
    * Recorre boletas con ticket en estado '98' (en proceso) o 'error_envio',
    * consulta getStatus y, al obtener el CDR, actualiza cada boleta con su
    * estado final (ACCEPTED/REJECTED/OBSERVED) y su CDR individual.
+   *
+   * Se ejecuta BAJO DEMANDA (botón del frontend o endpoint process-pending).
+   * No hay ejecución automática en background.
+   *
+   * Cada llamada a SUNAT queda registrada en logs con timestamp para auditoría.
    */
-  async processPendingTickets(): Promise<{ processedTickets: number; resolvedInvoices: number }> {
+  async processPendingTickets(): Promise<ProcessPendingResult> {
     // Tickets distintos pendientes de consulta (no duplicamos llamadas por boleta).
     const pendingTickets = await this.prisma.invoice.findMany({
       where: {
@@ -194,14 +193,30 @@ export class SummaryProcessorService implements OnModuleInit {
       distinct: ['ticket'],
     });
 
+    if (pendingTickets.length === 0) {
+      this.logger.log(
+        `[CONSULTA] ${new Date().toISOString()} — No hay boletas pendientes de SUNAT. Nada que consultar.`,
+      );
+      return { processedTickets: 0, resolvedInvoices: 0, stillPending: 0 };
+    }
+
+    this.logger.log(
+      `[CONSULTA] ${new Date().toISOString()} — Consultando ${pendingTickets.length} ticket(s) a SUNAT: ${pendingTickets.map((t) => t.ticket).join(', ')}`,
+    );
+
     let resolvedInvoices = 0;
+    let stillPending = 0;
     for (const row of pendingTickets) {
       const ticket = row.ticket!;
       try {
         const status = await this.sunat.getStatus(ticket);
+        this.logger.log(
+          `[SUNAT] getStatus(${ticket}) → statusCode=${status.statusCode} cdr=${status.cdrBase64 ? 'presente' : 'ausente'}`,
+        );
 
         if (status.statusCode === '98') {
           // Sigue en proceso. Nada que actualizar (summaryStatus ya es '98').
+          stillPending += await this.prisma.invoice.count({ where: { ticket } });
           continue;
         }
 
@@ -240,15 +255,15 @@ export class SummaryProcessorService implements OnModuleInit {
         const count = await this.prisma.invoice.count({ where: { ticket } });
         resolvedInvoices += count;
         this.logger.log(
-          `Ticket ${ticket} → ${newStatus} (code ${cdr.responseCode}). ${count} boletas actualizadas.`,
+          `[RESUELTO] Ticket ${ticket} → ${newStatus} (code ${cdr.responseCode}). ${count} boleta(s) actualizadas.`,
         );
       } catch (err: any) {
         // No lanzamos: un ticket problemático no debe frenar a los demás.
-        this.logger.error(`Error consultando ticket ${ticket}: ${err?.message ?? err}`);
+        this.logger.error(`[ERROR] Consultando ticket ${ticket}: ${err?.message ?? err}`);
       }
     }
 
-    return { processedTickets: pendingTickets.length, resolvedInvoices };
+    return { processedTickets: pendingTickets.length, resolvedInvoices, stillPending };
   }
 
   private toDate(d: Date): string {

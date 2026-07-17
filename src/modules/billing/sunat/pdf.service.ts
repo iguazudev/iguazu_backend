@@ -89,11 +89,17 @@ export class PdfService {
     doc.font(font);
     for (const item of input.items) {
       doc.fontSize(8);
+      // Descripción: calcula cuánto alto ocupa (puede ser multilínea con width:280).
+      const descY = y;
       doc.text(item.description, 40, y, { width: 280 });
-      doc.text(this.fmt(item.quantity), 330, y, { width: 50, align: 'right' });
-      doc.text(this.money(item.unitPrice), 390, y, { width: 75, align: 'right' });
-      doc.text(this.money(item.subtotal), 475, y, { width: 80, align: 'right' });
-      y += 16;
+      // pdfkit expone la posición Y final del último texto escrito.
+      const textHeight = (doc as any).y - descY;
+      // Cant/P.Unit/Subtotal se alinean a la PRIMERA línea de la descripción.
+      doc.text(this.fmt(item.quantity), 330, descY, { width: 50, align: 'right' });
+      doc.text(this.money(item.unitPrice), 390, descY, { width: 75, align: 'right' });
+      doc.text(this.money(item.subtotal), 475, descY, { width: 80, align: 'right' });
+      // Avanza según el alto real del ítem (mínimo 16, +4 de padding).
+      y += Math.max(textHeight, 14) + 6;
     }
 
     // ---- Totales ----

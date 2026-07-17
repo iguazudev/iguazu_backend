@@ -274,6 +274,9 @@ export class BillingService {
     }
 
     // Persistir la boleta como PENDING (aún sin enviar a SUNAT).
+    // En reintento: limpiamos los campos residuales del rechazo anterior
+    // (sunatCode/sunatDescription/cdrXml del intento fallido) para que no queden
+    // como "fantasma" mezclados con el nuevo estado PENDING del resumen.
     const invoiceData = {
       invoiceType,
       serie,
@@ -290,10 +293,19 @@ export class BillingService {
       status: InvoiceStatus.PENDING,
       signedXml,
       hash,
+      sunatCode: null,
+      sunatDescription: null,
+      cdrXml: null,
       emittedBy: { connect: { id: userId } },
     };
     const invoice = retryInvoice
-      ? await this.invoices.update(retryInvoice.id, { ...invoiceData, issueDate: new Date() })
+      ? await this.invoices.update(retryInvoice.id, {
+          ...invoiceData,
+          issueDate: new Date(),
+          ticket: null,
+          summaryStatus: null,
+          summarySentAt: null,
+        })
       : await this.invoices.create({ sale: { connect: { id: saleId } }, ...invoiceData });
 
     // Generar PDF de la boleta (ya está firmada, sin esperar CDR).
