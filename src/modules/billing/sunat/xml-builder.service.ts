@@ -206,6 +206,16 @@ function appendParty(
   const legal = partyNode.ele('cac:PartyLegalEntity');
   cdata(legal, 'cbc:RegistrationName', party.razonSocial);
 
+  const hasAddress = Boolean(
+    party.address?.ubigeo ||
+      party.address?.addressTypeCode ||
+      party.address?.cityName ||
+      party.address?.countrySubentity ||
+      party.address?.district ||
+      party.address?.line,
+  );
+  if (!hasAddress) return partyNode;
+
   const address = legal.ele('cac:RegistrationAddress');
   txt(address, 'cbc:ID', party.address?.ubigeo, {
     schemeName: 'Ubigeos',

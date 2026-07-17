@@ -27,6 +27,7 @@ const RECEPTIONIST_PERMISSIONS = [
   'PATCH /customers/:id',
   'GET /rooms',
   'GET /rooms/:id',
+  'PATCH /rooms/:id/clean',
   'GET /room-types',
   'GET /price-types',
   'GET /room-type-prices',

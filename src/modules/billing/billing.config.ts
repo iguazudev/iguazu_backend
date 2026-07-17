@@ -94,4 +94,32 @@ export class BillingConfig {
       },
     };
   }
+
+  /**
+   * Intervalo de polling de tickets del Resumen Diario, en milisegundos.
+   * Por defecto 180000 (3 minutos). Se configura con SUMMARY_POLL_MS.
+   */
+  get summaryPollMs(): number {
+    const raw = this.config.get<string>('SUMMARY_POLL_MS');
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 180000;
+  }
+
+  /**
+   * Valida coherencia entre modo y endpoint. Devuelve un mensaje de advertencia
+   * si hay incoherencia (ej. modo=beta con endpoint de producción), o null si OK.
+   */
+  validateModoEndpoint(): string | null {
+    const modo = this.modo;
+    const endpoint = this.endpoint.toLowerCase();
+    const isProdEndpoint = endpoint.includes('e-factura.sunat.gob.pe');
+    const isBetaEndpoint = endpoint.includes('e-beta.sunat.gob.pe');
+    if (modo === 'produccion' && isBetaEndpoint) {
+      return `Incoherencia: SUNAT_MODO=produccion pero el endpoint es beta (${endpoint}). Los comprobantes no llegaran a SUNAT produccion.`;
+    }
+    if (modo === 'beta' && isProdEndpoint) {
+      return `Posible incoherencia: SUNAT_MODO=beta pero el endpoint parece de produccion (${endpoint}).`;
+    }
+    return null;
+  }
 }

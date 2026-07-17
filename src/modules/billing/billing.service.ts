@@ -24,6 +24,8 @@ import { ZipService } from './sunat/zip.service';
 import { SunatService } from './sunat/sunat.service';
 import { UnzipCdrService } from './sunat/unzip-cdr.service';
 import { PdfService } from './sunat/pdf.service';
+import { SummaryBuilderService } from './sunat/summary-builder.service';
+import { SummaryProcessorService } from './summary-processor.service';
 import { IssueCreditNoteDto, IssueFromSaleDto } from './dto/billing.dto';
 
 @Injectable()
@@ -40,6 +42,8 @@ export class BillingService {
     private readonly sunat: SunatService,
     private readonly unzip: UnzipCdrService,
     private readonly pdf: PdfService,
+    private readonly summaryBuilder: SummaryBuilderService,
+    private readonly summaryProcessor: SummaryProcessorService,
   ) {}
 
   // ============================================================
@@ -111,8 +115,34 @@ export class BillingService {
       details: sale.details,
     });
 
-    // Ejecutar el flujo SUNAT (XML → firma → zip → envío → CDR).
-    const result = await this.processSunat(nombreZip, data, invoiceType);
+    // Bifurcación del flujo SUNAT:
+    //  - Factura (01) y notas (07/08) → sendBill síncrono (CDR inmediato).
+    //  - Boleta (03) → Resumen Diario asíncrono (sendSummary + getStatus).
+    const isBoleta = invoiceType === '03';
+
+    if (isBoleta) {
+      return this.processBoleta({
+        saleId,
+        userId,
+        invoiceType,
+        serie,
+        correlativo,
+        docNumber,
+        nombreZip,
+        data,
+        taxableAmount,
+        taxAmount,
+        total,
+        customerDocType,
+        customerDocNumber: documentNumber,
+        customer: sale.customer,
+        details: sale.details,
+        retryInvoice,
+      });
+    }
+
+    // === Flujo síncrono (factura/notas) ===
+    const result = await this.processSunatSync(nombreZip, data, invoiceType);
 
     // Persistir Invoice.
     const invoiceData = {
@@ -193,6 +223,132 @@ export class BillingService {
   }
 
   // ============================================================
+  // Emisión de BOLETA (03): Resumen Diario asíncrono
+  // ============================================================
+  private async processBoleta(input: {
+    saleId: number;
+    userId: number;
+    invoiceType: string;
+    serie: string;
+    correlativo: number;
+    docNumber: string;
+    nombreZip: string;
+    data: ComprobanteData;
+    taxableAmount: number;
+    taxAmount: number;
+    total: number;
+    customerDocType: string;
+    customerDocNumber: string;
+    customer: any;
+    details: any[];
+    retryInvoice: any;
+  }) {
+    const {
+      saleId,
+      userId,
+      invoiceType,
+      serie,
+      correlativo,
+      docNumber,
+      data,
+      taxableAmount,
+      taxAmount,
+      total,
+      customerDocType,
+      customerDocNumber,
+      customer,
+      details,
+      retryInvoice,
+    } = input;
+
+    // Firmar el XML de la boleta para tener signedXml y hash (para QR/PDF).
+    const xml = this.xmlBuilder.buildInvoice(data);
+    let signedXml = '';
+    let hash: string | undefined;
+    try {
+      signedXml = await this.signer.sign(xml);
+      hash = /<DigestValue[^>]*>([^<]+)<\/DigestValue>/.exec(signedXml)?.[1];
+    } catch (err) {
+      this.logger.error(`Error firmando boleta ${docNumber}: ${(err as Error).message}`);
+      throw err;
+    }
+
+    // Persistir la boleta como PENDING (aún sin enviar a SUNAT).
+    const invoiceData = {
+      invoiceType,
+      serie,
+      correlativo,
+      docNumber,
+      currency: 'PEN',
+      taxableAmount,
+      exemptAmount: 0,
+      taxAmount,
+      total,
+      customerDocType,
+      customerDocNumber,
+      customerName: customer.businessName || customer.fullName,
+      status: InvoiceStatus.PENDING,
+      signedXml,
+      hash,
+      emittedBy: { connect: { id: userId } },
+    };
+    const invoice = retryInvoice
+      ? await this.invoices.update(retryInvoice.id, { ...invoiceData, issueDate: new Date() })
+      : await this.invoices.create({ sale: { connect: { id: saleId } }, ...invoiceData });
+
+    // Generar PDF de la boleta (ya está firmada, sin esperar CDR).
+    let pdfBase64: string | null = null;
+    try {
+      pdfBase64 = await this.pdf.generate({
+        docNumber,
+        invoiceType,
+        issueDate: invoice.issueDate,
+        customerDocType,
+        customerDocNumber,
+        customerName: customer.businessName || customer.fullName,
+        taxableAmount,
+        exemptAmount: 0,
+        taxAmount,
+        total,
+        currency: 'PEN',
+        hash,
+        items: details.map((d) => ({
+          description: d.description,
+          quantity: Number(d.quantity),
+          unitPrice: Number(d.unitPrice),
+          subtotal: Number(d.subtotal),
+        })),
+      });
+      await this.invoices.update(invoice.id, { pdfBase64 });
+    } catch (err) {
+      this.logger.warn(`No se pudo generar PDF de boleta: ${(err as Error).message}`);
+    }
+
+    // Intentar enviar el Resumen Diario ahora. Si falla (red, credenciales),
+    // la boleta queda PENDING y el cron la reintentará.
+    const summaryResult = await this.summaryProcessor.sendDailySummary();
+
+    return {
+      id: invoice.id,
+      saleId,
+      docNumber,
+      invoiceType,
+      status: InvoiceStatus.PENDING,
+      sunatCode: null,
+      sunatDescription: summaryResult.summaryError
+        ? `Resumen pendiente de envío: ${summaryResult.summaryError}`
+        : 'Boleta enviada en Resumen Diario. En proceso en SUNAT.',
+      pdfBase64,
+      reusedRejectedInvoice: Boolean(retryInvoice),
+      retryInvoiceId: retryInvoice?.id ?? null,
+      sunatRequest: this.safeSunatRequest(input.nombreZip, data),
+      ticket: summaryResult.ticket ?? null,
+      summaryStatus: summaryResult.summaryStatus ?? null,
+      summaryError: summaryResult.summaryError ?? null,
+    };
+  }
+
+  // ============================================================
   // Nota de crédito
   // ============================================================
   async issueCreditNote(invoiceId: number, dto: IssueCreditNoteDto, userId: number) {
@@ -233,7 +389,7 @@ export class BillingService {
       customerName: original.customerName,
     });
 
-    const result = await this.processSunat(nombreZip, data, invoiceType, true);
+    const result = await this.processSunatSync(nombreZip, data, invoiceType, true);
 
     const note = await this.invoices.create({
       invoiceType,
@@ -293,9 +449,10 @@ export class BillingService {
   }
 
   // ============================================================
-  // Flujo común XML → firma → zip → SUNAT → CDR
+  // Flujo síncrono: XML → firma → zip → SUNAT (sendBill) → CDR
+  // Aplica a facturas (01) y notas de crédito/débito (07/08).
   // ============================================================
-  private async processSunat(
+  private async processSunatSync(
     nombreZip: string,
     data: ComprobanteData,
     invoiceType: string,

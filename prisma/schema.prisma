@@ -481,6 +481,14 @@ model Invoice {
   affectingInvoices Invoice[]     @relation("InvoiceAffectation")
   cancelReason      String?
 
+  // Resumen Diario de Boletas (envío asíncrono vía sendSummary)
+  // Solo aplica a boletas (invoiceType '03'): el comprobante se envía agrupado
+  // en un resumen y SUNAT responde con un ticket que se consulta con getStatus.
+  ticket            String? // ticket devuelto por SUNAT (sendSummary)
+  summaryStatus     String? // '0' procesado | '98' en proceso | '99' con error
+  summarySentAt     DateTime? // fecha/hora de envío del resumen
+  summaryCorrelativo Int?   // correlativo del resumen RC al que pertenece
+
   emittedById       Int
   emittedBy         User          @relation("InvoiceEmittedBy", fields: [emittedById], references: [id])
   pdfBase64         String? // PDF generado
@@ -491,6 +499,8 @@ model Invoice {
   @@index([emittedById])
   @@index([status])
   @@index([serie, correlativo])
+  @@index([ticket])
+  @@index([summaryStatus])
 }
 
 // Numeración correlativa por serie.

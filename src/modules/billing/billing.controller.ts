@@ -13,11 +13,15 @@ import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { BillingService } from './billing.service';
 import { IssueCreditNoteDto, IssueFromSaleDto } from './dto/billing.dto';
+import { SummaryProcessorService } from './summary-processor.service';
 
 @UseGuards(JwtAuthGuard)
 @Controller('billing')
 export class BillingController {
-  constructor(private readonly billingService: BillingService) {}
+  constructor(
+    private readonly billingService: BillingService,
+    private readonly summaryProcessor: SummaryProcessorService,
+  ) {}
 
   /** Emite comprobante (factura/boleta) desde una venta pagada. */
   @Post('issue-from-sale/:saleId')
@@ -37,6 +41,24 @@ export class BillingController {
     @CurrentUser() user: any,
   ) {
     return this.billingService.issueCreditNote(id, dto, user.sub);
+  }
+
+  /**
+   * Fuerza el envío del Resumen Diario de Boletas pendientes.
+   * Útil para testing o para no esperar al siguiente ciclo de emisión.
+   */
+  @Post('send-summary')
+  sendSummary() {
+    return this.summaryProcessor.sendDailySummary();
+  }
+
+  /**
+   * Fuerza la consulta de tickets pendientes (getStatus) y actualiza el estado
+   * de las boletas. Útil para depuración o para no esperar al polling automático.
+   */
+  @Post('process-pending')
+  processPending() {
+    return this.summaryProcessor.processPendingTickets();
   }
 
   @Get()
