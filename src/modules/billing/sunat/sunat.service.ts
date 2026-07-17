@@ -10,7 +10,8 @@ const parser = new XMLParser({
 });
 
 // Namespace de WS-Security (OASIS) exigido por SUNAT (manual RS 097-2012, sec. 2.2).
-const WSSE_NS = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd';
+const WSSE_NS =
+  'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd';
 const SER_NS = 'http://service.sunat.gob.pe';
 
 export interface SunatResult {
@@ -101,9 +102,14 @@ const buildSendBillBody = (nombreZip: string, zipBase64: string) =>
 const buildSendSummaryBody = (nombreZip: string, zipBase64: string) =>
   `<fileName>${nombreZip}.zip</fileName><contentFile>${zipBase64}</contentFile>`;
 
-const buildGetStatusBody = (ticket: string) => `<ticket>${escapeXml(ticket)}</ticket>`;
+const buildGetStatusBody = (ticket: string) =>
+  `<ticket>${escapeXml(ticket)}</ticket>`;
 
-function buildFaultError(body: any, status: number, statusText: string): SunatFaultError {
+function buildFaultError(
+  body: any,
+  status: number,
+  statusText: string,
+): SunatFaultError {
   const { faultcode, faultstring } = body?.Fault || {};
   const rawFaultcode = faultcode || 'SIN_CODIGO';
   const rawFaultstring = faultstring || 'SIN_DESCRIPCION';
@@ -144,7 +150,9 @@ function toFaultThrow(
     });
     return e;
   }
-  const e = new Error(`No se pudo procesar la respuesta de SUNAT (HTTP ${httpStatus})`);
+  const e = new Error(
+    `No se pudo procesar la respuesta de SUNAT (HTTP ${httpStatus})`,
+  );
   (e as any).sunatDebug = makeDebug({
     soapResponse: responseData,
     httpStatus,
@@ -160,6 +168,7 @@ interface DebugInput {
   httpStatusText?: string;
   sunatFault?: unknown;
   env?: RequestEnvelope;
+  soapAction?: string;
 }
 
 @Injectable()
@@ -179,7 +188,11 @@ export class SunatService {
 
     const soapBody = buildSendBillBody(nombreZip, zipBase64);
     const soapRequest = this.buildEnvelope('sendBill', soapBody);
-    const body = await this.call(soapRequest, { soapRequest, zipBase64, nombreZip });
+    const body = await this.call(soapRequest, {
+      soapRequest,
+      zipBase64,
+      nombreZip,
+    });
 
     const cdrBase64 = body.sendBillResponse?.applicationResponse;
     if (!cdrBase64) {
@@ -200,13 +213,20 @@ export class SunatService {
    * Comunicación de Baja). Devuelve un ticket para consultar con getStatus.
    * Operación asíncrona (manual, sec. 2.5).
    */
-  async sendSummary(zipBase64: string, nombreZip: string): Promise<SunatSummaryResult> {
+  async sendSummary(
+    zipBase64: string,
+    nombreZip: string,
+  ): Promise<SunatSummaryResult> {
     if (!zipBase64) throw new Error('Falta el contenido del ZIP en base64');
     if (!nombreZip) throw new Error('Falta el nombre del ZIP a enviar');
 
     const soapBody = buildSendSummaryBody(nombreZip, zipBase64);
     const soapRequest = this.buildEnvelope('sendSummary', soapBody);
-    const body = await this.call(soapRequest, { soapRequest, zipBase64, nombreZip });
+    const body = await this.call(soapRequest, {
+      soapRequest,
+      zipBase64,
+      nombreZip,
+    });
 
     const ticket = body.sendSummaryResponse?.ticket;
     if (!ticket) {
@@ -257,8 +277,16 @@ export class SunatService {
   // Privados
   // ============================================================
 
-  private buildEnvelope(method: 'sendBill' | 'sendSummary' | 'getStatus', bodyInner: string): string {
-    return buildSoapEnvelope(method, this.config.usuario, this.config.clave, bodyInner);
+  private buildEnvelope(
+    method: 'sendBill' | 'sendSummary' | 'getStatus',
+    bodyInner: string,
+  ): string {
+    return buildSoapEnvelope(
+      method,
+      this.config.usuario,
+      this.config.clave,
+      bodyInner,
+    );
   }
 
   /** Detecta el método SOAP del envelope para asignar el SOAPAction correcto. */
@@ -282,10 +310,14 @@ export class SunatService {
     let statusText: string;
 
     try {
-      ({ data, status, statusText } = await axios.post(this.config.endpoint, soapRequest, {
-        headers,
-        validateStatus: () => true,
-      }));
+      ({ data, status, statusText } = await axios.post(
+        this.config.endpoint,
+        soapRequest,
+        {
+          headers,
+          validateStatus: () => true,
+        },
+      ));
     } catch (err: any) {
       const responseData =
         typeof err?.response?.data === 'string'
@@ -312,7 +344,9 @@ export class SunatService {
       throw e;
     }
 
-    const body = parseSoapBody(typeof data === 'string' ? data : String(data ?? ''));
+    const body = parseSoapBody(
+      typeof data === 'string' ? data : String(data ?? ''),
+    );
     if (!body) {
       throw toFaultThrow(
         { Fault: undefined },
@@ -324,7 +358,14 @@ export class SunatService {
       );
     }
     if (body.Fault) {
-      throw toFaultThrow(body, typeof data === 'string' ? data : String(data), status, statusText, env, this.makeDebug.bind(this));
+      throw toFaultThrow(
+        body,
+        typeof data === 'string' ? data : String(data),
+        status,
+        statusText,
+        env,
+        this.makeDebug.bind(this),
+      );
     }
     if (Number(status) >= 400) {
       const e = new Error(`SUNAT devolvio HTTP ${status} ${statusText}`);
@@ -340,7 +381,9 @@ export class SunatService {
   }
 
   private get authorizationBase64(): string {
-    return Buffer.from(`${this.config.usuario}:${this.config.clave}`).toString('base64');
+    return Buffer.from(`${this.config.usuario}:${this.config.clave}`).toString(
+      'base64',
+    );
   }
 
   /**
@@ -353,7 +396,10 @@ export class SunatService {
     const zip = zipBase64 ? Buffer.from(zipBase64, 'base64') : undefined;
     const nombreZip = env?.nombreZip;
     const authB64 = this.authorizationBase64;
-    const maskedAuth = authB64.length > 4 ? '*'.repeat(authB64.length - 4) + authB64.slice(-4) : '****';
+    const maskedAuth =
+      authB64.length > 4
+        ? '*'.repeat(authB64.length - 4) + authB64.slice(-4)
+        : '****';
 
     return {
       endpoint: this.config.endpoint,
@@ -368,7 +414,9 @@ export class SunatService {
             xmlFileName: `${nombreZip}.xml`,
             zipFileName: `${nombreZip}.zip`,
             zipSizeBytes: zip?.length,
-            zipSha256: zip ? createHash('sha256').update(zip).digest('hex') : undefined,
+            zipSha256: zip
+              ? createHash('sha256').update(zip).digest('hex')
+              : undefined,
           }
         : {}),
       soapRequest: env?.soapRequest,
@@ -377,7 +425,11 @@ export class SunatService {
       httpStatusText: input.httpStatusText,
       headersEnviados: {
         'Content-Type': 'text/xml; charset=utf-8',
-        SOAPAction: 'urn:sendBill',
+        SOAPAction:
+          input.soapAction ??
+          (env?.soapRequest
+            ? this.resolveSoapAction(env.soapRequest)
+            : 'urn:sendBill'),
         Authorization: `Basic ${maskedAuth}`,
       },
       sunatFault: input.sunatFault,

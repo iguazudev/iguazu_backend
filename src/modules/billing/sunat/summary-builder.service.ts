@@ -61,20 +61,28 @@ export class SummaryBuilderService {
     const doc = create({ version: '1.0', encoding: 'utf-8' });
     const root = doc.ele('SummaryDocuments', {
       'xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
-      'xmlns:cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
-      'xmlns:cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2',
+      'xmlns:cbc':
+        'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
+      'xmlns:cac':
+        'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2',
       'xmlns:ds': 'http://www.w3.org/2000/09/xmldsig#',
-      'xmlns:ext': 'urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2',
+      'xmlns:ext':
+        'urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2',
       'xmlns:sac': SAC_NS,
       xmlns: SUMMARY_DEFAULT_NS,
     });
 
     // Reservado para la firma XMLDSig (XmlSignerService la insertará aquí).
-    root.ele('ext:UBLExtensions').ele('ext:UBLExtension').ele('ext:ExtensionContent').up().up().up();
+    root
+      .ele('ext:UBLExtensions')
+      .ele('ext:UBLExtension')
+      .ele('ext:ExtensionContent')
+      .up()
+      .up()
+      .up();
 
     const emisor = this.config.emisor;
     const refDateCompact = data.referenceDate.replace(/-/g, '');
-    const issueDateCompact = data.issueDate.replace(/-/g, '');
 
     this.txt(root, 'cbc:UBLVersionID', '2.0');
     this.txt(root, 'cbc:CustomizationID', '1.1');
@@ -86,64 +94,77 @@ export class SummaryBuilderService {
     const signature = root.ele('cac:Signature');
     this.txt(signature, 'cbc:ID', `RC-${refDateCompact}-${data.correlativo}`);
     const signatoryParty = signature.ele('cac:SignatoryParty');
-    this.txt(signatoryParty.ele('cac:PartyIdentification'), 'cbc:ID', emisor.ruc);
-    this.txt(signatoryParty.ele('cac:PartyName'), 'cbc:Name', emisor.razonSocial);
     this.txt(
-      signature.ele('cac:DigitalSignatureAttachment').ele('cac:ExternalReference'),
+      signatoryParty.ele('cac:PartyIdentification'),
+      'cbc:ID',
+      emisor.ruc,
+    );
+    this.txt(
+      signatoryParty.ele('cac:PartyName'),
+      'cbc:Name',
+      emisor.razonSocial,
+    );
+    this.txt(
+      signature
+        .ele('cac:DigitalSignatureAttachment')
+        .ele('cac:ExternalReference'),
       'cbc:URI',
       '#SignatureSP',
     );
 
-    // Emisor.
+    // Emisor (estructura UBL 2.0 de SummaryDocuments, distinta a Invoice UBL 2.1).
     const supplier = root.ele('cac:AccountingSupplierParty');
+    this.txt(supplier, 'cbc:CustomerAssignedAccountID', emisor.ruc);
+    this.txt(supplier, 'cbc:AdditionalAccountID', '6');
     const supplierParty = supplier.ele('cac:Party');
-    this.txt(
-      supplierParty.ele('cac:PartyIdentification'),
-      'cbc:ID',
-      emisor.ruc,
-      {
-        schemeID: '6',
-        schemeName: 'Documento de Identidad',
-        schemeAgencyName: 'PE:SUNAT',
-        schemeURI: 'urn:pe:gob:sunat:cpe:see:gem:catalogos:catalogo06',
-      },
-    );
-    this.txt(supplierParty.ele('cac:PartyName'), 'cbc:Name', emisor.razonSocial);
     const supplierLegal = supplierParty.ele('cac:PartyLegalEntity');
     this.txt(supplierLegal, 'cbc:RegistrationName', emisor.razonSocial);
 
     // Líneas (una por boleta/nota).
     for (const line of data.lines) {
-      this.appendLine(root, line, emisor.ruc);
+      this.appendLine(root, line);
     }
 
     return root.end({ prettyPrint: true, indent: '    ' });
   }
 
-  private appendLine(root: XmlNode, line: SummaryLine, ruc: string): void {
+  private appendLine(root: XmlNode, line: SummaryLine): void {
     const lineNode = root.ele('sac:SummaryDocumentsLine');
 
     this.txt(lineNode, 'cbc:LineID', String(line.lineId));
     this.txt(lineNode, 'cbc:DocumentTypeCode', line.documentTypeCode);
-    this.txt(lineNode, 'cbc:DocumentSerialID', line.serie);
-    this.txt(lineNode, 'cbc:DocumentNumberID', line.correlativo);
+    this.txt(lineNode, 'cbc:ID', `${line.serie}-${line.correlativo}`);
 
     // Cliente: en el resumen diario la estructura es plana (CustomerAssignedAccountID +
     // AdditionalAccountID), NO cac:Party como en las facturas.
-    const customer = lineNode.ele('sac:AccountingCustomerParty');
-    this.txt(customer, 'cbc:CustomerAssignedAccountID', line.customerDocNumber || '-');
+    const customer = lineNode.ele('cac:AccountingCustomerParty');
+    this.txt(
+      customer,
+      'cbc:CustomerAssignedAccountID',
+      line.customerDocNumber || '-',
+    );
     this.txt(customer, 'cbc:AdditionalAccountID', line.customerDocType || '0');
+
+    const status = lineNode.ele('cac:Status');
+    this.txt(status, 'cbc:ConditionCode', '1');
+    this.txt(lineNode, 'sac:TotalAmount', line.totalAmount, {
+      currencyID: 'PEN',
+    });
 
     // Operaciones gravadas (BillingPayment). InstructionID '01' = venta gravada.
     const billingPayment = lineNode.ele('sac:BillingPayment');
-    this.txt(billingPayment, 'cbc:PaidAmount', line.taxableAmount, { currencyID: 'PEN' });
+    this.txt(billingPayment, 'cbc:PaidAmount', line.taxableAmount, {
+      currencyID: 'PEN',
+    });
     this.txt(billingPayment, 'cbc:InstructionID', '01');
 
     // TaxTotal con IGV.
     const taxTotal = lineNode.ele('cac:TaxTotal');
     this.txt(taxTotal, 'cbc:TaxAmount', line.taxAmount, { currencyID: 'PEN' });
     const taxSubtotal = taxTotal.ele('cac:TaxSubtotal');
-    this.txt(taxSubtotal, 'cbc:TaxAmount', line.taxAmount, { currencyID: 'PEN' });
+    this.txt(taxSubtotal, 'cbc:TaxAmount', line.taxAmount, {
+      currencyID: 'PEN',
+    });
     const taxCategory = taxSubtotal.ele('cac:TaxCategory');
     const taxScheme = taxCategory.ele('cac:TaxScheme');
     this.txt(taxScheme, 'cbc:ID', '1000');
