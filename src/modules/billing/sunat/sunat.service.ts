@@ -261,11 +261,19 @@ export class SunatService {
     return buildSoapEnvelope(method, this.config.usuario, this.config.clave, bodyInner);
   }
 
+  /** Detecta el método SOAP del envelope para asignar el SOAPAction correcto. */
+  private resolveSoapAction(soapRequest: string): string {
+    if (/<ser:getStatus[\s>]/.test(soapRequest)) return 'urn:getStatus';
+    if (/<ser:sendSummary[\s>]/.test(soapRequest)) return 'urn:sendSummary';
+    return 'urn:sendBill';
+  }
+
   /** POST al endpoint SUNAT y parseo del body SOAP. Lanza con debug si hay Fault o fallo. */
   private async call(soapRequest: string, env: RequestEnvelope): Promise<any> {
     const headers = {
       'Content-Type': 'text/xml; charset=utf-8',
-      SOAPAction: 'urn:sendBill',
+      // SOAPAction debe coincidir con el método invocado dentro del body.
+      SOAPAction: this.resolveSoapAction(soapRequest),
       Authorization: `Basic ${this.authorizationBase64}`,
     };
 
