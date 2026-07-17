@@ -122,7 +122,15 @@ export class SummaryProcessorService {
     } catch (err) {
       const msg = `Error firmando resumen: ${(err as Error).message}`;
       this.logger.error(msg);
-      return { includedCount: block.length, correlativo, ticket: null, summaryStatus: null, summaryError: msg };
+      await this.prisma.invoice.updateMany({
+        where: { id: { in: block.map((b) => b.id) } },
+        data: {
+          summaryStatus: 'error_envio',
+          summaryCorrelativo: correlativo,
+          sunatDescription: `Resumen pendiente de envío: ${msg}`,
+        },
+      });
+      return { includedCount: block.length, correlativo, ticket: null, summaryStatus: 'error_envio', summaryError: msg };
     }
 
     const nombreZip = `${this.config.ruc}-RC-${referenceDate.replace(/-/g, '')}-${correlativo}`;
@@ -159,7 +167,11 @@ export class SummaryProcessorService {
       // Persistimos el detalle del fallo para depuración (sin cambiar status: sigue PENDING).
       await this.prisma.invoice.updateMany({
         where: { id: { in: block.map((b) => b.id) } },
-        data: { summaryStatus: 'error_envio', summaryCorrelativo: correlativo },
+        data: {
+          summaryStatus: 'error_envio',
+          summaryCorrelativo: correlativo,
+          sunatDescription: `Resumen pendiente de envío: ${msg}`,
+        },
       });
       return {
         includedCount: block.length,

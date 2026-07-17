@@ -485,9 +485,10 @@ model Invoice {
   // Solo aplica a boletas (invoiceType '03'): el comprobante se envía agrupado
   // en un resumen y SUNAT responde con un ticket que se consulta con getStatus.
   ticket            String? // ticket devuelto por SUNAT (sendSummary)
-  summaryStatus     String? // '0' procesado | '98' en proceso | '99' con error
+  summaryStatus     String? // '0' procesado | '98' en proceso | '99' con error | 'error_envio' | 'error_consulta'
   summarySentAt     DateTime? // fecha/hora de envío del resumen
   summaryCorrelativo Int?   // correlativo del resumen RC al que pertenece
+  statusConsultas   Int @default(0) // contador de consultas getStatus fallidas (Internal Error, etc.)
 
   emittedById       Int
   emittedBy         User          @relation("InvoiceEmittedBy", fields: [emittedById], references: [id])

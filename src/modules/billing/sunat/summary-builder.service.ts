@@ -128,20 +128,11 @@ export class SummaryBuilderService {
     this.txt(lineNode, 'cbc:DocumentSerialID', line.serie);
     this.txt(lineNode, 'cbc:DocumentNumberID', line.correlativo);
 
-    // Cliente (AccountingCustomerParty dentro de sac).
+    // Cliente: en el resumen diario la estructura es plana (CustomerAssignedAccountID +
+    // AdditionalAccountID), NO cac:Party como en las facturas.
     const customer = lineNode.ele('sac:AccountingCustomerParty');
-    const customerParty = customer.ele('cac:Party');
-    this.txt(
-      customerParty.ele('cac:PartyIdentification'),
-      'cbc:ID',
-      line.customerDocNumber || '-',
-      {
-        schemeID: line.customerDocType || '0',
-        schemeName: 'Documento de Identidad',
-        schemeAgencyName: 'PE:SUNAT',
-        schemeURI: 'urn:pe:gob:sunat:cpe:see:gem:catalogos:catalogo06',
-      },
-    );
+    this.txt(customer, 'cbc:CustomerAssignedAccountID', line.customerDocNumber || '-');
+    this.txt(customer, 'cbc:AdditionalAccountID', line.customerDocType || '0');
 
     // Operaciones gravadas (BillingPayment). InstructionID '01' = venta gravada.
     const billingPayment = lineNode.ele('sac:BillingPayment');
