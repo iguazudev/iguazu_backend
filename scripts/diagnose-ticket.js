@@ -114,10 +114,6 @@ function processResult(res) {
     console.log('Status:', res.status);
 
     const body = typeof res.data === 'string' ? res.data : String(res.data);
-    console.log('\n--- HTTP ---');
-    console.log('Status:', res.status);
-
-    const body = typeof res.data === 'string' ? res.data : String(res.data);
     console.log('\n--- RESPUESTA SOAP CRUDA ---');
     console.log(body);
 
@@ -174,7 +170,6 @@ function processResult(res) {
     }
     console.log('\n========================================');
   }
-}
 
 run().catch((err) => {
   console.error('\n[ERROR inesperado]', err.message);
