@@ -32,6 +32,7 @@ export interface ProcessPendingResult {
   stillPending: number;
   /** Cuántos tickets fallaron al consultar SUNAT. */
   queryErrors: number;
+  errors?: Array<{ ticket: string; message: string }>;
 }
 
 /**
@@ -225,6 +226,7 @@ export class SummaryProcessorService {
     let resolvedInvoices = 0;
     let stillPending = 0;
     let queryErrors = 0;
+    const errors: Array<{ ticket: string; message: string }> = [];
     const minTicketAgeMs = this.config.summaryPollMs;
     for (const row of pendingTickets) {
       const ticket = row.ticket!;
@@ -299,20 +301,22 @@ export class SummaryProcessorService {
         );
       } catch (err: any) {
         // No lanzamos: un ticket problemático no debe frenar a los demás.
-        this.logger.error(`[ERROR] Consultando ticket ${ticket}: ${err?.message ?? err}`);
+        const message = err?.message ?? String(err);
+        this.logger.error(`[ERROR] Consultando ticket ${ticket}: ${message}`);
         stillPending += ticketInvoices;
         queryErrors += 1;
+        errors.push({ ticket, message });
         await this.prisma.invoice.updateMany({
           where: { ticket },
           data: {
             statusConsultas: { increment: 1 },
-            sunatDescription: `Consulta SUNAT pendiente: ${err?.message ?? err}`,
+            sunatDescription: `Consulta SUNAT pendiente: ${message}`,
           },
         });
       }
     }
 
-    return { processedTickets: pendingTickets.length, resolvedInvoices, stillPending, queryErrors };
+    return { processedTickets: pendingTickets.length, resolvedInvoices, stillPending, queryErrors, errors };
   }
 
   private toDate(d: Date): string {
