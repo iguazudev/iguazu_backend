@@ -33,6 +33,7 @@ describe('SummaryProcessorService', () => {
     const result = await service.sendDailySummary();
 
     expect(result.includedCount).toBe(1);
+    expect(result.summaryFileName).toBe('undefined-RC-20260717-9');
     expect(summaryBuilder.build).toHaveBeenCalledWith(
       expect.objectContaining({
         referenceDate: '2026-07-17',

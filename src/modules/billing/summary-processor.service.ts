@@ -15,6 +15,8 @@ export interface SendSummaryResult {
   includedCount: number;
   /** Correlativo del resumen RC asignado. */
   correlativo: number;
+  /** Nombre del ZIP/XML RC enviado a SUNAT, sin extension. */
+  summaryFileName: string | null;
   /** Ticket devuelto por SUNAT (si el envío fue exitoso). */
   ticket: string | null;
   /** '98' = en proceso, '0' = procesado (improbable de inmediato). */
@@ -84,6 +86,7 @@ export class SummaryProcessorService {
       return {
         includedCount: 0,
         correlativo: 0,
+        summaryFileName: null,
         ticket: null,
         summaryStatus: null,
         summaryError: null,
@@ -137,7 +140,7 @@ export class SummaryProcessorService {
           sunatDescription: `Resumen pendiente de envío: ${msg}`,
         },
       });
-      return { includedCount: block.length, correlativo, ticket: null, summaryStatus: 'error_envio', summaryError: msg };
+      return { includedCount: block.length, correlativo, summaryFileName: null, ticket: null, summaryStatus: 'error_envio', summaryError: msg };
     }
 
     const nombreZip = `${this.config.ruc}-RC-${referenceDate.replace(/-/g, '')}-${correlativo}`;
@@ -158,12 +161,14 @@ export class SummaryProcessorService {
           summaryStatus: '98',
           summarySentAt: issueDate,
           summaryCorrelativo: correlativo,
+          sunatDescription: `Resumen ${nombreZip}.zip enviado a SUNAT. Ticket: ${ticket}.`,
         },
       });
 
       return {
         includedCount: block.length,
         correlativo,
+        summaryFileName: nombreZip,
         ticket,
         summaryStatus: '98',
         summaryError: null,
@@ -183,6 +188,7 @@ export class SummaryProcessorService {
       return {
         includedCount: block.length,
         correlativo,
+        summaryFileName: nombreZip,
         ticket: null,
         summaryStatus: 'error_envio',
         summaryError: msg,

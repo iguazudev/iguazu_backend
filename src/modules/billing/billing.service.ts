@@ -116,33 +116,8 @@ export class BillingService {
       details: sale.details,
     });
 
-    // Bifurcación del flujo SUNAT:
-    //  - Factura (01) y notas (07/08) → sendBill síncrono (CDR inmediato).
-    //  - Boleta (03) → Resumen Diario asíncrono (sendSummary + getStatus).
-    const isBoleta = invoiceType === '03';
-
-    if (isBoleta) {
-      return this.processBoleta({
-        saleId,
-        userId,
-        invoiceType,
-        serie,
-        correlativo,
-        docNumber,
-        nombreZip,
-        data,
-        taxableAmount,
-        taxAmount,
-        total,
-        customerDocType,
-        customerDocNumber: documentNumber,
-        customer: sale.customer,
-        details: sale.details,
-        retryInvoice,
-      });
-    }
-
-    // === Flujo síncrono (factura/notas) ===
+    // Envío síncrono individual (sendBill). El Anexo 113-2018 contempla
+    // boletas tipo 03 enviadas individualmente, además de facturas/notas.
     const result = await this.processSunatSync(nombreZip, data, invoiceType);
 
     // Persistir Invoice.
@@ -165,6 +140,10 @@ export class BillingService {
       cdrXml: result.cdrXml ?? null,
       signedXml: result.signedXml ?? null,
       hash: result.hash ?? null,
+      ticket: null,
+      summaryStatus: null,
+      summarySentAt: null,
+      summaryCorrelativo: null,
       emittedBy: { connect: { id: userId } },
     };
     const invoice = retryInvoice
@@ -350,12 +329,13 @@ export class BillingService {
       sunatCode: null,
       sunatDescription: summaryResult.summaryError
         ? `Resumen pendiente de envío: ${summaryResult.summaryError}`
-        : 'Boleta enviada en Resumen Diario. En proceso en SUNAT.',
+        : `Boleta enviada en Resumen Diario ${summaryResult.summaryFileName}. En proceso en SUNAT.`,
       pdfBase64,
       reusedRejectedInvoice: Boolean(retryInvoice),
       retryInvoiceId: retryInvoice?.id ?? null,
       sunatRequest: this.safeSunatRequest(input.nombreZip, data),
       ticket: summaryResult.ticket ?? null,
+      summaryFileName: summaryResult.summaryFileName ?? null,
       summaryStatus: summaryResult.summaryStatus ?? null,
       summaryError: summaryResult.summaryError ?? null,
     };
@@ -481,7 +461,7 @@ export class BillingService {
 
   // ============================================================
   // Flujo síncrono: XML → firma → zip → SUNAT (sendBill) → CDR
-  // Aplica a facturas (01) y notas de crédito/débito (07/08).
+  // Aplica a facturas (01), boletas individuales (03) y notas (07/08).
   // ============================================================
   private async processSunatSync(
     nombreZip: string,
