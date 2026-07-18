@@ -43,7 +43,11 @@ const movementInclude = {
 export class CashMovementsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async record(data: RecordCashMovementDto, db: any = this.prisma) {
+  async record(
+    data: RecordCashMovementDto,
+    db: any = this.prisma,
+    options: { allowClosedShiftForAdmin?: boolean } = {},
+  ) {
     if (Number(data.amount) <= 0) {
       throw new BadRequestException('El monto debe ser mayor a cero.');
     }
@@ -56,10 +60,14 @@ export class CashMovementsService {
       : await db.cashShift.findFirst({
           where: { status: CashShiftStatus.OPEN, openedById: data.userId },
         });
+    const adminClosedAllowed =
+      options.allowClosedShiftForAdmin &&
+      data.actorRole === UserRole.ADMIN &&
+      Boolean(data.cashShiftId);
 
     if (
       !cashShift ||
-      cashShift.status !== CashShiftStatus.OPEN ||
+      (!adminClosedAllowed && cashShift.status !== CashShiftStatus.OPEN) ||
       (cashShift.openedById !== data.userId && data.actorRole !== UserRole.ADMIN)
     ) {
       throw new NotFoundException('No tienes caja abierta.');
@@ -182,6 +190,7 @@ export class CashMovementsService {
           referenceType: 'MANUAL',
         },
         tx,
+        { allowClosedShiftForAdmin: true },
       );
 
       if (

@@ -359,8 +359,6 @@ export class SalesService {
       });
     }
 
-    const openShift = await this.openShiftFor(user, dto.cashShiftId);
-
     // Venta PAGADA: revertir stock + crear movimientos de caja compensatorios.
     return this.prisma.$transaction(async (tx) => {
       // 1. Revertir stock de productos.
@@ -390,7 +388,7 @@ export class SalesService {
       for (const payment of sale.payments) {
         await tx.cashMovement.create({
           data: {
-            cashShiftId: openShift.id,
+            cashShiftId: sale.cashShiftId,
             userId: user.sub,
             type: CashMovementType.EXPENSE,
             category: payment.cashMovement?.category ?? CashMovementCategory.PRODUCT_SALE,
